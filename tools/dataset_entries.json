@@ -1,0 +1,420 @@
+[
+  {
+    "instance_id": "commit-0/thefuck",
+    "repo": "thefuck",
+    "original_repo": "nvbn/thefuck",
+    "base_commit": "cfa562d6e856de14dbf58fb3583ccd4caaec5d74",
+    "reference_commit": "c7e7e1d884d3bb241ea6448f72a989434c2a35ec",
+    "setup": {
+      "install": "pip install -e \".\"",
+      "packages": "",
+      "pip_packages": [
+        "pytest",
+        "pytest-json-report"
+      ],
+      "pre_install": [],
+      "python": "3.12",
+      "specification": "https://thefuck.readthedocs.io/"
+    },
+    "test": {
+      "test_cmd": "pytest",
+      "test_dir": "tests"
+    },
+    "src_dir": "thefuck"
+  },
+  {
+    "instance_id": "commit-0/rich",
+    "repo": "rich",
+    "original_repo": "Textualize/rich",
+    "base_commit": "0add9e51e98332d7210b9f45dcda334e2d385ce7",
+    "reference_commit": "fc41075a3206d2a5fd846c6f41c4d2becab814fa",
+    "setup": {
+      "install": "pip install -e \".\"",
+      "packages": "",
+      "pip_packages": [
+        "pytest",
+        "pytest-json-report"
+      ],
+      "pre_install": [],
+      "python": "3.12",
+      "specification": "https://rich.readthedocs.io/en/latest/"
+    },
+    "test": {
+      "test_cmd": "pytest",
+      "test_dir": "tests"
+    },
+    "src_dir": "rich"
+  },
+  {
+    "instance_id": "commit-0/black",
+    "repo": "black",
+    "original_repo": "psf/black",
+    "base_commit": "1ff640f33ce8243b3a12291448c365c54a2553b5",
+    "reference_commit": "28167fc7c071475c88e00419dac06722a7b5168d",
+    "setup": {
+      "install": "pip install -e \".[tests]\"",
+      "packages": "",
+      "pip_packages": [
+        "pytest",
+        "pytest-json-report"
+      ],
+      "pre_install": [],
+      "python": "3.10",
+      "specification": "https://black.readthedocs.io/"
+    },
+    "test": {
+      "test_cmd": "pytest",
+      "test_dir": "tests"
+    },
+    "src_dir": "src/black"
+  },
+  {
+    "instance_id": "commit-0/manim",
+    "repo": "manim",
+    "original_repo": "ManimCommunity/manim",
+    "base_commit": "5512b58283bc9df6b2701263b84d2e3d1113dbc2",
+    "reference_commit": "21cf9998cc7ad34cdc5cb2fae09aa500d88d86c2",
+    "setup": {
+      "install": "pip install -e \".[dev]\"",
+      "packages": "",
+      "pip_packages": [
+        "pytest",
+        "pytest-json-report"
+      ],
+      "pre_install": [
+        "apt-get update && apt-get install -y build-essential"
+      ],
+      "python": "3.11",
+      "specification": "https://docs.manim.community/"
+    },
+    "test": {
+      "test_cmd": "pytest",
+      "test_dir": "tests"
+    },
+    "src_dir": "manim"
+  },
+  {
+    "instance_id": "commit-0/textual",
+    "repo": "textual",
+    "original_repo": "Textualize/textual",
+    "base_commit": "25dbbb2c37899f1515b8b4addbd64e05ea654432",
+    "reference_commit": "0f0849fd37fbd0d4d6f81889476c22340129df67",
+    "setup": {
+      "install": "pip install -e \".\"",
+      "packages": "",
+      "pip_packages": [
+        "pytest",
+        "pytest-json-report"
+      ],
+      "pre_install": [],
+      "python": "3.12",
+      "specification": "https://textual.textualize.io/"
+    },
+    "test": {
+      "test_cmd": "pytest",
+      "test_dir": "tests"
+    },
+    "src_dir": "src/textual"
+  },
+  {
+    "instance_id": "commit-0/prefect",
+    "repo": "prefect",
+    "original_repo": "PrefectHQ/prefect",
+    "base_commit": "deefcf38167899e98c26ddecd49534998c399262",
+    "reference_commit": "3fad0feaddad05b5e5ad45eedf021e759a86c7f3",
+    "setup": {
+      "install": "pip install -e \".[dev]\"",
+      "packages": "",
+      "pip_packages": [
+        "pytest",
+        "pytest-json-report"
+      ],
+      "pre_install": [
+        "apt-get update && apt-get install -y build-essential"
+      ],
+      "python": "3.10",
+      "specification": "https://docs.prefect.io"
+    },
+    "test": {
+      "test_cmd": "pytest",
+      "test_dir": "tests"
+    },
+    "src_dir": "src/prefect"
+  },
+  {
+    "instance_id": "commit-0/typer",
+    "repo": "typer",
+    "original_repo": "tiangolo/typer",
+    "base_commit": "73071699e7add5adc81fff248f59a4e1e3600fa7",
+    "reference_commit": "f47d887d4c3ecc7f3b8e7cc92ce8cc1d56914e3f",
+    "setup": {
+      "install": "pip install -e \".[tests]\"",
+      "packages": "",
+      "pip_packages": [
+        "pytest",
+        "pytest-json-report"
+      ],
+      "pre_install": [],
+      "python": "3.10",
+      "specification": "https://typer.tiangolo.com"
+    },
+    "test": {
+      "test_cmd": "pytest",
+      "test_dir": "tests"
+    },
+    "src_dir": "typer"
+  },
+  {
+    "instance_id": "commit-0/aiohttp",
+    "repo": "aiohttp",
+    "original_repo": "aio-libs/aiohttp",
+    "base_commit": "97fb53b93517af4c2b0661918c4d2c33633fccad",
+    "reference_commit": "438cb407c431b966b57f3d3ce06be6a0f8b1a1b9",
+    "setup": {
+      "install": "pip install -e \".\"",
+      "packages": "",
+      "pip_packages": [
+        "pytest",
+        "pytest-json-report"
+      ],
+      "pre_install": [],
+      "python": "3.10",
+      "specification": "https://aiohttp.readthedocs.io/"
+    },
+    "test": {
+      "test_cmd": "pytest",
+      "test_dir": "tests/"
+    },
+    "src_dir": "aiohttp"
+  },
+  {
+    "instance_id": "commit-0/discord.py",
+    "repo": "discord.py",
+    "original_repo": "Rapptz/discord.py",
+    "base_commit": "00f6dad914bd046cc4ef6af8d61836ef3077b836",
+    "reference_commit": "5d74ed3e0ce5178cf454825bd5a71f0248738f54",
+    "setup": {
+      "install": "pip install -e \".[test]\"",
+      "packages": "",
+      "pip_packages": [
+        "pytest",
+        "pytest-json-report"
+      ],
+      "pre_install": [],
+      "python": "3.8",
+      "specification": "https://discordpy.readthedocs.io/en/latest/"
+    },
+    "test": {
+      "test_cmd": "pytest",
+      "test_dir": "tests"
+    },
+    "src_dir": "discord"
+  },
+  {
+    "instance_id": "commit-0/httpx",
+    "repo": "httpx",
+    "original_repo": "encode/httpx",
+    "base_commit": "875d5db3aef0142e7e7ecb0c4cb05819cb7064dd",
+    "reference_commit": "b5addb64f0161ff6bfe94c124ef76f6a1fba5254",
+    "setup": {
+      "install": "pip install -e \".\"",
+      "packages": "",
+      "pip_packages": [
+        "pytest",
+        "pytest-json-report"
+      ],
+      "pre_install": [],
+      "python": "3.9",
+      "specification": "https://www.python-httpx.org"
+    },
+    "test": {
+      "test_cmd": "pytest",
+      "test_dir": "tests"
+    },
+    "src_dir": "httpx"
+  },
+  {
+    "instance_id": "commit-0/starlette",
+    "repo": "starlette",
+    "original_repo": "encode/starlette",
+    "base_commit": "508a0d3ee5b25bc2f8a12461340ccbb2426f9bb3",
+    "reference_commit": "9ee951980bae776103715b66305f807d9e8245da",
+    "setup": {
+      "install": "pip install -e \".[dev]\"",
+      "packages": "",
+      "pip_packages": [
+        "pytest",
+        "pytest-json-report"
+      ],
+      "pre_install": [],
+      "python": "3.10",
+      "specification": "https://starlette.dev/"
+    },
+    "test": {
+      "test_cmd": "pytest",
+      "test_dir": "tests"
+    },
+    "src_dir": "starlette"
+  },
+  {
+    "instance_id": "commit-0/pip",
+    "repo": "pip",
+    "original_repo": "pypa/pip",
+    "base_commit": "b41d4184edb1341c403ab83146a11486cd8f6ba6",
+    "reference_commit": "f82e37d6352e2bc7b5f9e1982a4f7de6aec03956",
+    "setup": {
+      "install": "pip install -e \".[test]\"",
+      "packages": "",
+      "pip_packages": [
+        "pytest",
+        "pytest-json-report"
+      ],
+      "pre_install": [],
+      "python": "3.9",
+      "specification": "https://pip.pypa.io"
+    },
+    "test": {
+      "test_cmd": "pytest",
+      "test_dir": "tests"
+    },
+    "src_dir": "src/pip"
+  },
+  {
+    "instance_id": "commit-0/boto3",
+    "repo": "boto3",
+    "original_repo": "boto/boto3",
+    "base_commit": "35e093f8fad973b3b4489e184e4a4c6aff7a070e",
+    "reference_commit": "d424ae25bd7751ceabcf42173eb604aad816bdb0",
+    "setup": {
+      "install": "pip install -e \".\"",
+      "packages": "",
+      "pip_packages": [
+        "pytest",
+        "pytest-json-report"
+      ],
+      "pre_install": [],
+      "python": "3.9",
+      "specification": "https://boto3.readthedocs.io/"
+    },
+    "test": {
+      "test_cmd": "pytest",
+      "test_dir": "tests"
+    },
+    "src_dir": "boto3"
+  },
+  {
+    "instance_id": "commit-0/arrow",
+    "repo": "arrow",
+    "original_repo": "arrow-py/arrow",
+    "base_commit": "4d7f04be8343690c2686df59df836d2520413a52",
+    "reference_commit": "b423717da81aaf8117313b4b377efaa6413a9639",
+    "setup": {
+      "install": "pip install -e \".[test]\"",
+      "packages": "",
+      "pip_packages": [
+        "pytest",
+        "pytest-json-report"
+      ],
+      "pre_install": [],
+      "python": "3.8",
+      "specification": "https://arrow.readthedocs.io"
+    },
+    "test": {
+      "test_cmd": "pytest",
+      "test_dir": "tests"
+    },
+    "src_dir": "arrow"
+  },
+  {
+    "instance_id": "commit-0/gspread",
+    "repo": "gspread",
+    "original_repo": "burnash/gspread",
+    "base_commit": "0bc207630f1a78dc726e98a59484ca5bbe7bd86e",
+    "reference_commit": "1fb4ba7d37f5630e1f973159917bb91f8fda295e",
+    "setup": {
+      "install": "pip install -e \".\"",
+      "packages": "",
+      "pip_packages": [
+        "pytest",
+        "pytest-json-report"
+      ],
+      "pre_install": [],
+      "python": "3.8",
+      "specification": "https://gspread.readthedocs.io/en/latest/"
+    },
+    "test": {
+      "test_cmd": "pytest",
+      "test_dir": "tests"
+    },
+    "src_dir": "gspread"
+  },
+  {
+    "instance_id": "commit-0/werkzeug",
+    "repo": "werkzeug",
+    "original_repo": "pallets/werkzeug",
+    "base_commit": "76a7f0b6b9543cb3437ec841d378a21c9a6df1e6",
+    "reference_commit": "64b09e734b1db8afbf770f1feb8d3cb48de157d5",
+    "setup": {
+      "install": "pip install -e \".[tests]\"",
+      "packages": "",
+      "pip_packages": [
+        "pytest",
+        "pytest-json-report"
+      ],
+      "pre_install": [],
+      "python": "3.10",
+      "specification": "https://werkzeug.palletsprojects.com/"
+    },
+    "test": {
+      "test_cmd": "pytest",
+      "test_dir": "tests"
+    },
+    "src_dir": "src/werkzeug"
+  },
+  {
+    "instance_id": "commit-0/transitions",
+    "repo": "transitions",
+    "original_repo": "pytransitions/transitions",
+    "base_commit": "c5da6a682ae821e675c11556a3cf9e5e857f38d1",
+    "reference_commit": "bd42b38f3627e6bca7274fb4d9af2e105f75da7c",
+    "setup": {
+      "install": "pip install -e \".\"",
+      "packages": "",
+      "pip_packages": [
+        "pytest",
+        "pytest-json-report"
+      ],
+      "pre_install": [],
+      "python": "3.12",
+      "specification": "https://transitions.readthedocs.io/"
+    },
+    "test": {
+      "test_cmd": "pytest",
+      "test_dir": "tests"
+    },
+    "src_dir": "transitions"
+  },
+  {
+    "instance_id": "commit-0/botocore",
+    "repo": "botocore",
+    "original_repo": "boto/botocore",
+    "base_commit": "8d4100a91279b38a5cbc5cb3bdf1037ec4d9c993",
+    "reference_commit": "ca4bd2f30ecd9ca57882e04d675f5ef2e0ac1288",
+    "setup": {
+      "install": "pip install -e \".\"",
+      "packages": "",
+      "pip_packages": [
+        "pytest",
+        "pytest-json-report"
+      ],
+      "pre_install": [],
+      "python": "3.9",
+      "specification": "https://botocore.readthedocs.io/"
+    },
+    "test": {
+      "test_cmd": "pytest",
+      "test_dir": "tests"
+    },
+    "src_dir": "botocore"
+  }
+]

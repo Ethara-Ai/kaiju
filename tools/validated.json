@@ -1,0 +1,1600 @@
+[
+  {
+    "full_name": "Textualize/rich",
+    "name": "rich",
+    "owner": "Textualize",
+    "stars": 55800,
+    "default_branch": "master",
+    "description": "Rich text formatting for the terminal",
+    "analysis": {
+      "full_name": "Textualize/rich",
+      "src_dir": "rich",
+      "test_dir": "tests",
+      "python_version": null,
+      "install": {
+        "has_pyproject": true,
+        "has_setup_py": true,
+        "has_setup_cfg": false,
+        "build_backend": "poetry.core.masonry.api",
+        "extra_deps": []
+      },
+      "test_deps": [
+        "pytest-cov"
+      ],
+      "docs": {
+        "has_readme": true,
+        "has_docs_dir": true,
+        "has_sphinx": false,
+        "has_mkdocs": false,
+        "readme_size": 17103
+      },
+      "file_counts": {
+        "total_py_files": 213,
+        "src_files": 146,
+        "test_files": 67,
+        "total_functions": 1818,
+        "total_lines": 51766
+      },
+      "all_files_count": 536,
+      "validation": {
+        "has_src_dir": true,
+        "has_test_dir": true,
+        "has_installable_package": true,
+        "has_documentation": true,
+        "estimated_stub_count": 1818,
+        "estimated_complexity": "large"
+      }
+    },
+    "test_results": null,
+    "status": "pass",
+    "issues": []
+  },
+  {
+    "full_name": "Textualize/textual",
+    "name": "textual",
+    "owner": "Textualize",
+    "stars": 34900,
+    "default_branch": "main",
+    "description": "TUI framework for Python",
+    "analysis": {
+      "full_name": "Textualize/textual",
+      "src_dir": "src/textual",
+      "test_dir": "tests",
+      "python_version": null,
+      "install": {
+        "has_pyproject": true,
+        "has_setup_py": false,
+        "has_setup_cfg": false,
+        "build_backend": "poetry.core.masonry.api",
+        "extra_deps": []
+      },
+      "test_deps": [
+        "pytest-asyncio",
+        "pytest-cov",
+        "pytest-xdist"
+      ],
+      "docs": {
+        "has_readme": true,
+        "has_docs_dir": true,
+        "has_sphinx": false,
+        "has_mkdocs": false,
+        "readme_size": 5979
+      },
+      "file_counts": {
+        "total_py_files": 985,
+        "src_files": 575,
+        "test_files": 410,
+        "total_functions": 8110,
+        "total_lines": 138612
+      },
+      "all_files_count": 2097,
+      "validation": {
+        "has_src_dir": true,
+        "has_test_dir": true,
+        "has_installable_package": true,
+        "has_documentation": true,
+        "estimated_stub_count": 8110,
+        "estimated_complexity": "massive"
+      }
+    },
+    "test_results": null,
+    "status": "pass",
+    "issues": []
+  },
+  {
+    "full_name": "python-poetry/poetry",
+    "name": "poetry",
+    "owner": "python-poetry",
+    "stars": 34300,
+    "default_branch": "main",
+    "description": "Python packaging and dependency management",
+    "analysis": {
+      "full_name": "python-poetry/poetry",
+      "src_dir": null,
+      "test_dir": "tests",
+      "python_version": ">=3.10,<4.0",
+      "install": {
+        "has_pyproject": true,
+        "has_setup_py": false,
+        "has_setup_cfg": false,
+        "build_backend": "poetry.core.masonry.api",
+        "extra_deps": []
+      },
+      "test_deps": [
+        "coverage",
+        "pytest-cov",
+        "pytest-mock",
+        "pytest-xdist"
+      ],
+      "docs": {
+        "has_readme": true,
+        "has_docs_dir": true,
+        "has_sphinx": false,
+        "has_mkdocs": false,
+        "readme_size": 5464
+      },
+      "file_counts": {
+        "total_py_files": 437,
+        "src_files": 191,
+        "test_files": 246,
+        "total_functions": 3108,
+        "total_lines": 74827
+      },
+      "all_files_count": 983,
+      "validation": {
+        "has_src_dir": false,
+        "has_test_dir": true,
+        "has_installable_package": true,
+        "has_documentation": true,
+        "estimated_stub_count": 3108,
+        "estimated_complexity": "massive"
+      }
+    },
+    "test_results": null,
+    "status": "fail",
+    "issues": [
+      "no_src_dir"
+    ]
+  },
+  {
+    "full_name": "ManimCommunity/manim",
+    "name": "manim",
+    "owner": "ManimCommunity",
+    "stars": 37300,
+    "default_branch": "main",
+    "description": "Mathematical animation engine",
+    "analysis": {
+      "full_name": "ManimCommunity/manim",
+      "src_dir": "manim",
+      "test_dir": "tests",
+      "python_version": ">=3.11",
+      "install": {
+        "has_pyproject": true,
+        "has_setup_py": false,
+        "has_setup_cfg": false,
+        "build_backend": "hatchling.build",
+        "extra_deps": [
+          "dev"
+        ]
+      },
+      "test_deps": [
+        "coverage",
+        "pytest-cov",
+        "pytest-xdist"
+      ],
+      "docs": {
+        "has_readme": true,
+        "has_docs_dir": true,
+        "has_sphinx": false,
+        "has_mkdocs": false,
+        "readme_size": 8378
+      },
+      "file_counts": {
+        "total_py_files": 325,
+        "src_files": 175,
+        "test_files": 150,
+        "total_functions": 3924,
+        "total_lines": 88914
+      },
+      "all_files_count": 1336,
+      "validation": {
+        "has_src_dir": true,
+        "has_test_dir": true,
+        "has_installable_package": true,
+        "has_documentation": true,
+        "estimated_stub_count": 3924,
+        "estimated_complexity": "massive"
+      }
+    },
+    "test_results": null,
+    "status": "pass",
+    "issues": []
+  },
+  {
+    "full_name": "nvbn/thefuck",
+    "name": "thefuck",
+    "owner": "nvbn",
+    "stars": 95700,
+    "default_branch": "master",
+    "description": "Auto-correct console commands",
+    "analysis": {
+      "full_name": "nvbn/thefuck",
+      "src_dir": "thefuck",
+      "test_dir": "tests",
+      "python_version": ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*, !=3.4.*",
+      "install": {
+        "has_pyproject": false,
+        "has_setup_py": true,
+        "has_setup_cfg": true,
+        "build_backend": null,
+        "extra_deps": []
+      },
+      "test_deps": [],
+      "docs": {
+        "has_readme": true,
+        "has_docs_dir": false,
+        "has_sphinx": false,
+        "has_mkdocs": false,
+        "readme_size": 26495
+      },
+      "file_counts": {
+        "total_py_files": 416,
+        "src_files": 213,
+        "test_files": 203,
+        "total_functions": 1462,
+        "total_lines": 16354
+      },
+      "all_files_count": 430,
+      "validation": {
+        "has_src_dir": true,
+        "has_test_dir": true,
+        "has_installable_package": true,
+        "has_documentation": false,
+        "estimated_stub_count": 1462,
+        "estimated_complexity": "large"
+      }
+    },
+    "test_results": null,
+    "status": "pass",
+    "issues": []
+  },
+  {
+    "full_name": "encode/httpx",
+    "name": "httpx",
+    "owner": "encode",
+    "stars": 14000,
+    "default_branch": "master",
+    "description": "Async HTTP client",
+    "analysis": {
+      "full_name": "encode/httpx",
+      "src_dir": "httpx",
+      "test_dir": "tests",
+      "python_version": ">=3.9",
+      "install": {
+        "has_pyproject": true,
+        "has_setup_py": false,
+        "has_setup_cfg": false,
+        "build_backend": "hatchling.build",
+        "extra_deps": []
+      },
+      "test_deps": [
+        "coverage"
+      ],
+      "docs": {
+        "has_readme": true,
+        "has_docs_dir": true,
+        "has_sphinx": false,
+        "has_mkdocs": true,
+        "readme_size": 4944
+      },
+      "file_counts": {
+        "total_py_files": 60,
+        "src_files": 23,
+        "test_files": 37,
+        "total_functions": 1134,
+        "total_lines": 17753
+      },
+      "all_files_count": 114,
+      "validation": {
+        "has_src_dir": true,
+        "has_test_dir": true,
+        "has_installable_package": true,
+        "has_documentation": true,
+        "estimated_stub_count": 1134,
+        "estimated_complexity": "large"
+      }
+    },
+    "test_results": null,
+    "status": "pass",
+    "issues": []
+  },
+  {
+    "full_name": "encode/starlette",
+    "name": "starlette",
+    "owner": "encode",
+    "stars": 10800,
+    "default_branch": "master",
+    "description": "ASGI framework",
+    "analysis": {
+      "full_name": "encode/starlette",
+      "src_dir": "starlette",
+      "test_dir": "tests",
+      "python_version": ">=3.10",
+      "install": {
+        "has_pyproject": true,
+        "has_setup_py": false,
+        "has_setup_cfg": false,
+        "build_backend": "hatchling.build",
+        "extra_deps": [
+          "dev"
+        ]
+      },
+      "test_deps": [
+        "coverage"
+      ],
+      "docs": {
+        "has_readme": true,
+        "has_docs_dir": true,
+        "has_sphinx": false,
+        "has_mkdocs": true,
+        "readme_size": 4787
+      },
+      "file_counts": {
+        "total_py_files": 67,
+        "src_files": 34,
+        "test_files": 33,
+        "total_functions": 1474,
+        "total_lines": 17480
+      },
+      "all_files_count": 118,
+      "validation": {
+        "has_src_dir": true,
+        "has_test_dir": true,
+        "has_installable_package": true,
+        "has_documentation": true,
+        "estimated_stub_count": 1474,
+        "estimated_complexity": "large"
+      }
+    },
+    "test_results": null,
+    "status": "pass",
+    "issues": []
+  },
+  {
+    "full_name": "celery/celery",
+    "name": "celery",
+    "owner": "celery",
+    "stars": 25600,
+    "default_branch": "main",
+    "description": "Distributed task queue",
+    "analysis": {
+      "full_name": "celery/celery",
+      "src_dir": "celery",
+      "test_dir": null,
+      "python_version": ">=3.10",
+      "install": {
+        "has_pyproject": true,
+        "has_setup_py": true,
+        "has_setup_cfg": true,
+        "build_backend": null,
+        "extra_deps": []
+      },
+      "test_deps": [
+        "coverage"
+      ],
+      "docs": {
+        "has_readme": true,
+        "has_docs_dir": true,
+        "has_sphinx": true,
+        "has_mkdocs": false,
+        "readme_size": 18021
+      },
+      "file_counts": {
+        "total_py_files": 416,
+        "src_files": 255,
+        "test_files": 161,
+        "total_functions": 7634,
+        "total_lines": 97665
+      },
+      "all_files_count": 790,
+      "validation": {
+        "has_src_dir": true,
+        "has_test_dir": false,
+        "has_installable_package": true,
+        "has_documentation": true,
+        "estimated_stub_count": 7634,
+        "estimated_complexity": "massive"
+      }
+    },
+    "test_results": null,
+    "status": "fail",
+    "issues": [
+      "no_test_dir"
+    ]
+  },
+  {
+    "full_name": "aio-libs/aiohttp",
+    "name": "aiohttp",
+    "owner": "aio-libs",
+    "stars": 15800,
+    "default_branch": "master",
+    "description": "Async HTTP framework",
+    "analysis": {
+      "full_name": "aio-libs/aiohttp",
+      "src_dir": "aiohttp",
+      "test_dir": "tests",
+      "python_version": ">= 3.10",
+      "install": {
+        "has_pyproject": true,
+        "has_setup_py": true,
+        "has_setup_cfg": true,
+        "build_backend": "setuptools.build_meta",
+        "extra_deps": []
+      },
+      "test_deps": [
+        "coverage",
+        "pytest-cov",
+        "pytest-xdist",
+        "tox"
+      ],
+      "docs": {
+        "has_readme": true,
+        "has_docs_dir": true,
+        "has_sphinx": true,
+        "has_mkdocs": false,
+        "readme_size": 5647
+      },
+      "file_counts": {
+        "total_py_files": 166,
+        "src_files": 85,
+        "test_files": 81,
+        "total_functions": 6238,
+        "total_lines": 91671
+      },
+      "all_files_count": 420,
+      "validation": {
+        "has_src_dir": true,
+        "has_test_dir": true,
+        "has_installable_package": true,
+        "has_documentation": true,
+        "estimated_stub_count": 6238,
+        "estimated_complexity": "massive"
+      }
+    },
+    "test_results": null,
+    "status": "pass",
+    "issues": []
+  },
+  {
+    "full_name": "pytest-dev/pytest",
+    "name": "pytest",
+    "owner": "pytest-dev",
+    "stars": 12800,
+    "default_branch": "main",
+    "description": "Testing framework",
+    "analysis": {
+      "full_name": "pytest-dev/pytest",
+      "src_dir": "src/pytest",
+      "test_dir": null,
+      "python_version": ">=3.10",
+      "install": {
+        "has_pyproject": true,
+        "has_setup_py": false,
+        "has_setup_cfg": false,
+        "build_backend": "setuptools.build_meta",
+        "extra_deps": [
+          "dev"
+        ]
+      },
+      "test_deps": [
+        "coverage",
+        "hypothesis",
+        "pytest-xdist"
+      ],
+      "docs": {
+        "has_readme": true,
+        "has_docs_dir": true,
+        "has_sphinx": false,
+        "has_mkdocs": false,
+        "readme_size": 5475
+      },
+      "file_counts": {
+        "total_py_files": 262,
+        "src_files": 121,
+        "test_files": 141,
+        "total_functions": 5915,
+        "total_lines": 105075
+      },
+      "all_files_count": 609,
+      "validation": {
+        "has_src_dir": true,
+        "has_test_dir": false,
+        "has_installable_package": true,
+        "has_documentation": true,
+        "estimated_stub_count": 5915,
+        "estimated_complexity": "massive"
+      }
+    },
+    "test_results": null,
+    "status": "fail",
+    "issues": [
+      "no_test_dir"
+    ]
+  },
+  {
+    "full_name": "sqlalchemy/sqlalchemy",
+    "name": "sqlalchemy",
+    "owner": "sqlalchemy",
+    "stars": 10200,
+    "default_branch": "main",
+    "description": "SQL toolkit and ORM",
+    "analysis": {
+      "full_name": "sqlalchemy/sqlalchemy",
+      "src_dir": null,
+      "test_dir": "test",
+      "python_version": ">=3.10",
+      "install": {
+        "has_pyproject": true,
+        "has_setup_py": true,
+        "has_setup_cfg": true,
+        "build_backend": "setuptools.build_meta",
+        "extra_deps": [
+          "test"
+        ]
+      },
+      "test_deps": [
+        "coverage",
+        "nox",
+        "pytest-cov",
+        "pytest-xdist",
+        "tox"
+      ],
+      "docs": {
+        "has_readme": true,
+        "has_docs_dir": true,
+        "has_sphinx": false,
+        "has_mkdocs": false,
+        "readme_size": 5719
+      },
+      "file_counts": {
+        "total_py_files": 667,
+        "src_files": 328,
+        "test_files": 339,
+        "total_functions": 30796,
+        "total_lines": 620198
+      },
+      "all_files_count": 896,
+      "validation": {
+        "has_src_dir": false,
+        "has_test_dir": true,
+        "has_installable_package": true,
+        "has_documentation": true,
+        "estimated_stub_count": 30796,
+        "estimated_complexity": "massive"
+      }
+    },
+    "test_results": null,
+    "status": "fail",
+    "issues": [
+      "no_src_dir"
+    ]
+  },
+  {
+    "full_name": "arrow-py/arrow",
+    "name": "arrow",
+    "owner": "arrow-py",
+    "stars": 8900,
+    "default_branch": "master",
+    "description": "Better dates & times",
+    "analysis": {
+      "full_name": "arrow-py/arrow",
+      "src_dir": "arrow",
+      "test_dir": "tests",
+      "python_version": ">=3.8",
+      "install": {
+        "has_pyproject": true,
+        "has_setup_py": false,
+        "has_setup_cfg": true,
+        "build_backend": "flit_core.buildapi",
+        "extra_deps": [
+          "test"
+        ]
+      },
+      "test_deps": [
+        "pytest-cov",
+        "pytest-mock"
+      ],
+      "docs": {
+        "has_readme": true,
+        "has_docs_dir": true,
+        "has_sphinx": true,
+        "has_mkdocs": false,
+        "readme_size": 5714
+      },
+      "file_counts": {
+        "total_py_files": 21,
+        "src_files": 11,
+        "test_files": 10,
+        "total_functions": 902,
+        "total_lines": 19930
+      },
+      "all_files_count": 39,
+      "validation": {
+        "has_src_dir": true,
+        "has_test_dir": true,
+        "has_installable_package": true,
+        "has_documentation": true,
+        "estimated_stub_count": 902,
+        "estimated_complexity": "large"
+      }
+    },
+    "test_results": null,
+    "status": "pass",
+    "issues": []
+  },
+  {
+    "full_name": "tiangolo/typer",
+    "name": "typer",
+    "owner": "tiangolo",
+    "stars": 17000,
+    "default_branch": "master",
+    "description": "CLI builder",
+    "analysis": {
+      "full_name": "tiangolo/typer",
+      "src_dir": "typer",
+      "test_dir": "tests",
+      "python_version": ">=3.10",
+      "install": {
+        "has_pyproject": true,
+        "has_setup_py": false,
+        "has_setup_cfg": false,
+        "build_backend": "pdm.backend",
+        "extra_deps": [
+          "test",
+          "dev"
+        ]
+      },
+      "test_deps": [
+        "coverage",
+        "pytest-cov",
+        "pytest-xdist"
+      ],
+      "docs": {
+        "has_readme": true,
+        "has_docs_dir": true,
+        "has_sphinx": false,
+        "has_mkdocs": true,
+        "readme_size": 14192
+      },
+      "file_counts": {
+        "total_py_files": 599,
+        "src_files": 319,
+        "test_files": 280,
+        "total_functions": 1553,
+        "total_lines": 24849
+      },
+      "all_files_count": 715,
+      "validation": {
+        "has_src_dir": true,
+        "has_test_dir": true,
+        "has_installable_package": true,
+        "has_documentation": true,
+        "estimated_stub_count": 1553,
+        "estimated_complexity": "large"
+      }
+    },
+    "test_results": null,
+    "status": "pass",
+    "issues": []
+  },
+  {
+    "full_name": "pypa/pip",
+    "name": "pip",
+    "owner": "pypa",
+    "stars": 10100,
+    "default_branch": "main",
+    "description": "Python package installer",
+    "analysis": {
+      "full_name": "pypa/pip",
+      "src_dir": "src/pip",
+      "test_dir": "tests",
+      "python_version": ">=3.9",
+      "install": {
+        "has_pyproject": true,
+        "has_setup_py": false,
+        "has_setup_cfg": false,
+        "build_backend": "flit_core.buildapi",
+        "extra_deps": [
+          "test"
+        ]
+      },
+      "test_deps": [
+        "coverage",
+        "nox",
+        "pytest-cov",
+        "pytest-xdist",
+        "tox"
+      ],
+      "docs": {
+        "has_readme": true,
+        "has_docs_dir": true,
+        "has_sphinx": false,
+        "has_mkdocs": false,
+        "readme_size": 2376
+      },
+      "file_counts": {
+        "total_py_files": 637,
+        "src_files": 410,
+        "test_files": 227,
+        "total_functions": 7210,
+        "total_lines": 169982
+      },
+      "all_files_count": 988,
+      "validation": {
+        "has_src_dir": true,
+        "has_test_dir": true,
+        "has_installable_package": true,
+        "has_documentation": true,
+        "estimated_stub_count": 7210,
+        "estimated_complexity": "massive"
+      }
+    },
+    "test_results": null,
+    "status": "pass",
+    "issues": []
+  },
+  {
+    "full_name": "boto/botocore",
+    "name": "botocore",
+    "owner": "boto",
+    "stars": 1500,
+    "default_branch": "develop",
+    "description": "Low-level AWS SDK",
+    "analysis": {
+      "full_name": "boto/botocore",
+      "src_dir": "botocore",
+      "test_dir": "tests",
+      "python_version": ">= 3.9",
+      "install": {
+        "has_pyproject": true,
+        "has_setup_py": true,
+        "has_setup_cfg": true,
+        "build_backend": null,
+        "extra_deps": []
+      },
+      "test_deps": [
+        "coverage",
+        "nox",
+        "pytest-cov",
+        "pytest-xdist",
+        "tox"
+      ],
+      "docs": {
+        "has_readme": true,
+        "has_docs_dir": true,
+        "has_sphinx": false,
+        "has_mkdocs": false,
+        "readme_size": 4646
+      },
+      "file_counts": {
+        "total_py_files": 285,
+        "src_files": 78,
+        "test_files": 207,
+        "total_functions": 6673,
+        "total_lines": 106300
+      },
+      "all_files_count": 3399,
+      "validation": {
+        "has_src_dir": true,
+        "has_test_dir": true,
+        "has_installable_package": true,
+        "has_documentation": true,
+        "estimated_stub_count": 6673,
+        "estimated_complexity": "massive"
+      }
+    },
+    "test_results": null,
+    "status": "pass",
+    "issues": []
+  },
+  {
+    "full_name": "psf/black",
+    "name": "black",
+    "owner": "psf",
+    "stars": 40600,
+    "default_branch": "main",
+    "description": "Code formatter",
+    "analysis": {
+      "full_name": "psf/black",
+      "src_dir": "src/black",
+      "test_dir": "tests",
+      "python_version": ">=3.10",
+      "install": {
+        "has_pyproject": true,
+        "has_setup_py": false,
+        "has_setup_cfg": false,
+        "build_backend": "hatchling.build",
+        "extra_deps": [
+          "test",
+          "dev"
+        ]
+      },
+      "test_deps": [
+        "coverage",
+        "hypothesis",
+        "pytest-cov",
+        "pytest-xdist",
+        "tox"
+      ],
+      "docs": {
+        "has_readme": true,
+        "has_docs_dir": true,
+        "has_sphinx": true,
+        "has_mkdocs": false,
+        "readme_size": 9723
+      },
+      "file_counts": {
+        "total_py_files": 316,
+        "src_files": 60,
+        "test_files": 256,
+        "total_functions": 2109,
+        "total_lines": 129344
+      },
+      "all_files_count": 408,
+      "validation": {
+        "has_src_dir": true,
+        "has_test_dir": true,
+        "has_installable_package": true,
+        "has_documentation": true,
+        "estimated_stub_count": 2109,
+        "estimated_complexity": "massive"
+      }
+    },
+    "test_results": null,
+    "status": "pass",
+    "issues": []
+  },
+  {
+    "full_name": "PrefectHQ/prefect",
+    "name": "prefect",
+    "owner": "PrefectHQ",
+    "stars": 18800,
+    "default_branch": "main",
+    "description": "Workflow orchestration",
+    "analysis": {
+      "full_name": "PrefectHQ/prefect",
+      "src_dir": "src/prefect",
+      "test_dir": "tests",
+      "python_version": ">=3.10,<3.15",
+      "install": {
+        "has_pyproject": true,
+        "has_setup_py": false,
+        "has_setup_cfg": false,
+        "build_backend": "hatchling.build",
+        "extra_deps": [
+          "dev"
+        ]
+      },
+      "test_deps": [
+        "coverage",
+        "pytest-asyncio",
+        "pytest-cov",
+        "pytest-timeout",
+        "pytest-xdist"
+      ],
+      "docs": {
+        "has_readme": true,
+        "has_docs_dir": true,
+        "has_sphinx": false,
+        "has_mkdocs": false,
+        "readme_size": 8579
+      },
+      "file_counts": {
+        "total_py_files": 1754,
+        "src_files": 1022,
+        "test_files": 732,
+        "total_functions": 26648,
+        "total_lines": 612714
+      },
+      "all_files_count": 5031,
+      "validation": {
+        "has_src_dir": true,
+        "has_test_dir": true,
+        "has_installable_package": true,
+        "has_documentation": true,
+        "estimated_stub_count": 26648,
+        "estimated_complexity": "massive"
+      }
+    },
+    "test_results": null,
+    "status": "pass",
+    "issues": []
+  },
+  {
+    "full_name": "pydantic/pydantic-settings",
+    "name": "pydantic-settings",
+    "owner": "pydantic",
+    "stars": 900,
+    "default_branch": "main",
+    "description": "Settings management",
+    "analysis": {
+      "full_name": "pydantic/pydantic-settings",
+      "src_dir": "pydantic_settings",
+      "test_dir": "tests",
+      "python_version": ">=3.10",
+      "install": {
+        "has_pyproject": true,
+        "has_setup_py": false,
+        "has_setup_cfg": false,
+        "build_backend": "hatchling.build",
+        "extra_deps": [
+          "test"
+        ]
+      },
+      "test_deps": [
+        "coverage",
+        "pytest-mock"
+      ],
+      "docs": {
+        "has_readme": true,
+        "has_docs_dir": true,
+        "has_sphinx": false,
+        "has_mkdocs": true,
+        "readme_size": 992
+      },
+      "file_counts": {
+        "total_py_files": 36,
+        "src_files": 22,
+        "test_files": 14,
+        "total_functions": 726,
+        "total_lines": 15651
+      },
+      "all_files_count": 50,
+      "validation": {
+        "has_src_dir": true,
+        "has_test_dir": true,
+        "has_installable_package": true,
+        "has_documentation": true,
+        "estimated_stub_count": 726,
+        "estimated_complexity": "large"
+      }
+    },
+    "test_results": null,
+    "status": "pass",
+    "issues": []
+  },
+  {
+    "full_name": "pallets/werkzeug",
+    "name": "werkzeug",
+    "owner": "pallets",
+    "stars": 7000,
+    "default_branch": "main",
+    "description": "WSGI utility library",
+    "analysis": {
+      "full_name": "pallets/werkzeug",
+      "src_dir": "src/werkzeug",
+      "test_dir": "tests",
+      "python_version": ">=3.10",
+      "install": {
+        "has_pyproject": true,
+        "has_setup_py": false,
+        "has_setup_cfg": false,
+        "build_backend": "flit_core.buildapi",
+        "extra_deps": [
+          "test",
+          "dev"
+        ]
+      },
+      "test_deps": [
+        "coverage",
+        "pytest-timeout",
+        "tox"
+      ],
+      "docs": {
+        "has_readme": true,
+        "has_docs_dir": true,
+        "has_sphinx": true,
+        "has_mkdocs": false,
+        "readme_size": 2750
+      },
+      "file_counts": {
+        "total_py_files": 138,
+        "src_files": 106,
+        "test_files": 32,
+        "total_functions": 2100,
+        "total_lines": 34960
+      },
+      "all_files_count": 275,
+      "validation": {
+        "has_src_dir": true,
+        "has_test_dir": true,
+        "has_installable_package": true,
+        "has_documentation": true,
+        "estimated_stub_count": 2100,
+        "estimated_complexity": "massive"
+      }
+    },
+    "test_results": null,
+    "status": "pass",
+    "issues": []
+  },
+  {
+    "full_name": "python-pillow/Pillow",
+    "name": "Pillow",
+    "owner": "python-pillow",
+    "stars": 12900,
+    "default_branch": "main",
+    "description": "Image processing library",
+    "analysis": {
+      "full_name": "python-pillow/Pillow",
+      "src_dir": "src/PIL",
+      "test_dir": null,
+      "python_version": ">=3.10",
+      "install": {
+        "has_pyproject": true,
+        "has_setup_py": true,
+        "has_setup_cfg": false,
+        "build_backend": "backend",
+        "extra_deps": [
+          "test"
+        ]
+      },
+      "test_deps": [
+        "coverage",
+        "pytest-cov",
+        "pytest-timeout",
+        "pytest-xdist"
+      ],
+      "docs": {
+        "has_readme": true,
+        "has_docs_dir": true,
+        "has_sphinx": true,
+        "has_mkdocs": false,
+        "readme_size": 5850
+      },
+      "file_counts": {
+        "total_py_files": 296,
+        "src_files": 127,
+        "test_files": 169,
+        "total_functions": 3767,
+        "total_lines": 74757
+      },
+      "all_files_count": 1737,
+      "validation": {
+        "has_src_dir": true,
+        "has_test_dir": false,
+        "has_installable_package": true,
+        "has_documentation": true,
+        "estimated_stub_count": 3767,
+        "estimated_complexity": "massive"
+      }
+    },
+    "test_results": null,
+    "status": "fail",
+    "issues": [
+      "no_test_dir"
+    ]
+  },
+  {
+    "full_name": "yaml/pyyaml",
+    "name": "pyyaml",
+    "owner": "yaml",
+    "stars": 2600,
+    "default_branch": "main",
+    "description": "YAML parser",
+    "analysis": {
+      "full_name": "yaml/pyyaml",
+      "src_dir": null,
+      "test_dir": "tests",
+      "python_version": ">=3.8",
+      "install": {
+        "has_pyproject": true,
+        "has_setup_py": true,
+        "has_setup_cfg": false,
+        "build_backend": "_pyyaml_pep517",
+        "extra_deps": []
+      },
+      "test_deps": [],
+      "docs": {
+        "has_readme": true,
+        "has_docs_dir": false,
+        "has_sphinx": false,
+        "has_mkdocs": false,
+        "readme_size": 1572
+      },
+      "file_counts": {
+        "total_py_files": 47,
+        "src_files": 23,
+        "test_files": 24,
+        "total_functions": 581,
+        "total_lines": 9362
+      },
+      "all_files_count": 636,
+      "validation": {
+        "has_src_dir": false,
+        "has_test_dir": true,
+        "has_installable_package": true,
+        "has_documentation": false,
+        "estimated_stub_count": 581,
+        "estimated_complexity": "large"
+      }
+    },
+    "test_results": null,
+    "status": "fail",
+    "issues": [
+      "no_src_dir"
+    ]
+  },
+  {
+    "full_name": "tartley/colorama",
+    "name": "colorama",
+    "owner": "tartley",
+    "stars": 3500,
+    "default_branch": "master",
+    "description": "Terminal color output",
+    "analysis": {
+      "full_name": "tartley/colorama",
+      "src_dir": "colorama",
+      "test_dir": null,
+      "python_version": ">=3.9",
+      "install": {
+        "has_pyproject": true,
+        "has_setup_py": false,
+        "has_setup_cfg": false,
+        "build_backend": "hatchling.build",
+        "extra_deps": []
+      },
+      "test_deps": [],
+      "docs": {
+        "has_readme": true,
+        "has_docs_dir": false,
+        "has_sphinx": false,
+        "has_mkdocs": false,
+        "readme_size": 15832
+      },
+      "file_counts": {
+        "total_py_files": 23,
+        "src_files": 16,
+        "test_files": 7,
+        "total_functions": 141,
+        "total_lines": 1886
+      },
+      "all_files_count": 45,
+      "validation": {
+        "has_src_dir": true,
+        "has_test_dir": false,
+        "has_installable_package": true,
+        "has_documentation": false,
+        "estimated_stub_count": 141,
+        "estimated_complexity": "medium"
+      }
+    },
+    "test_results": null,
+    "status": "fail",
+    "issues": [
+      "no_test_dir"
+    ]
+  },
+  {
+    "full_name": "jazzband/prettytable",
+    "name": "prettytable",
+    "owner": "jazzband",
+    "stars": 1400,
+    "default_branch": "main",
+    "description": "ASCII table display",
+    "analysis": {
+      "full_name": "jazzband/prettytable",
+      "src_dir": "src/prettytable",
+      "test_dir": "tests",
+      "python_version": ">=3.10",
+      "install": {
+        "has_pyproject": true,
+        "has_setup_py": false,
+        "has_setup_cfg": false,
+        "build_backend": "hatchling.build",
+        "extra_deps": [
+          "test"
+        ]
+      },
+      "test_deps": [
+        "coverage",
+        "pytest-cov"
+      ],
+      "docs": {
+        "has_readme": true,
+        "has_docs_dir": false,
+        "has_sphinx": false,
+        "has_mkdocs": false,
+        "readme_size": 35298
+      },
+      "file_counts": {
+        "total_py_files": 14,
+        "src_files": 4,
+        "test_files": 10,
+        "total_functions": 464,
+        "total_lines": 7850
+      },
+      "all_files_count": 29,
+      "validation": {
+        "has_src_dir": true,
+        "has_test_dir": true,
+        "has_installable_package": true,
+        "has_documentation": false,
+        "estimated_stub_count": 464,
+        "estimated_complexity": "medium"
+      }
+    },
+    "test_results": null,
+    "status": "pass",
+    "issues": []
+  },
+  {
+    "full_name": "Supervisor/supervisor",
+    "name": "supervisor",
+    "owner": "Supervisor",
+    "stars": 8600,
+    "default_branch": "main",
+    "description": "Process control system",
+    "analysis": {
+      "full_name": "Supervisor/supervisor",
+      "src_dir": "supervisor",
+      "test_dir": null,
+      "python_version": null,
+      "install": {
+        "has_pyproject": false,
+        "has_setup_py": true,
+        "has_setup_cfg": true,
+        "build_backend": null,
+        "extra_deps": []
+      },
+      "test_deps": [
+        "pytest-cov"
+      ],
+      "docs": {
+        "has_readme": true,
+        "has_docs_dir": true,
+        "has_sphinx": true,
+        "has_mkdocs": false,
+        "readme_size": 1257
+      },
+      "file_counts": {
+        "total_py_files": 65,
+        "src_files": 37,
+        "test_files": 28,
+        "total_functions": 3084,
+        "total_lines": 37314
+      },
+      "all_files_count": 142,
+      "validation": {
+        "has_src_dir": true,
+        "has_test_dir": false,
+        "has_installable_package": true,
+        "has_documentation": true,
+        "estimated_stub_count": 3084,
+        "estimated_complexity": "massive"
+      }
+    },
+    "test_results": null,
+    "status": "fail",
+    "issues": [
+      "no_test_dir"
+    ]
+  },
+  {
+    "full_name": "boto/boto3",
+    "name": "boto3",
+    "owner": "boto",
+    "stars": 9400,
+    "default_branch": "develop",
+    "description": "AWS SDK for Python",
+    "analysis": {
+      "full_name": "boto/boto3",
+      "src_dir": "boto3",
+      "test_dir": "tests",
+      "python_version": ">= 3.9",
+      "install": {
+        "has_pyproject": true,
+        "has_setup_py": true,
+        "has_setup_cfg": true,
+        "build_backend": null,
+        "extra_deps": []
+      },
+      "test_deps": [
+        "coverage",
+        "nox",
+        "pytest-cov",
+        "tox"
+      ],
+      "docs": {
+        "has_readme": true,
+        "has_docs_dir": true,
+        "has_sphinx": false,
+        "has_mkdocs": false,
+        "readme_size": 5581
+      },
+      "file_counts": {
+        "total_py_files": 103,
+        "src_files": 41,
+        "test_files": 62,
+        "total_functions": 1129,
+        "total_lines": 21051
+      },
+      "all_files_count": 239,
+      "validation": {
+        "has_src_dir": true,
+        "has_test_dir": true,
+        "has_installable_package": true,
+        "has_documentation": true,
+        "estimated_stub_count": 1129,
+        "estimated_complexity": "large"
+      }
+    },
+    "test_results": null,
+    "status": "pass",
+    "issues": []
+  },
+  {
+    "full_name": "burnash/gspread",
+    "name": "gspread",
+    "owner": "burnash",
+    "stars": 7300,
+    "default_branch": "main",
+    "description": "Google Sheets API",
+    "analysis": {
+      "full_name": "burnash/gspread",
+      "src_dir": "gspread",
+      "test_dir": "tests",
+      "python_version": ">=3.8",
+      "install": {
+        "has_pyproject": true,
+        "has_setup_py": false,
+        "has_setup_cfg": false,
+        "build_backend": "flit_core.buildapi",
+        "extra_deps": []
+      },
+      "test_deps": [],
+      "docs": {
+        "has_readme": true,
+        "has_docs_dir": true,
+        "has_sphinx": true,
+        "has_mkdocs": false,
+        "readme_size": 10196
+      },
+      "file_counts": {
+        "total_py_files": 18,
+        "src_files": 11,
+        "test_files": 7,
+        "total_functions": 428,
+        "total_lines": 10860
+      },
+      "all_files_count": 166,
+      "validation": {
+        "has_src_dir": true,
+        "has_test_dir": true,
+        "has_installable_package": true,
+        "has_documentation": true,
+        "estimated_stub_count": 428,
+        "estimated_complexity": "medium"
+      }
+    },
+    "test_results": null,
+    "status": "pass",
+    "issues": []
+  },
+  {
+    "full_name": "tox-dev/tox",
+    "name": "tox",
+    "owner": "tox-dev",
+    "stars": 3800,
+    "default_branch": "main",
+    "description": "Test automation",
+    "analysis": {
+      "full_name": "tox-dev/tox",
+      "src_dir": "src/tox",
+      "test_dir": "tests",
+      "python_version": ">=3.10",
+      "install": {
+        "has_pyproject": true,
+        "has_setup_py": false,
+        "has_setup_cfg": false,
+        "build_backend": "hatchling.build",
+        "extra_deps": [
+          "test",
+          "dev"
+        ]
+      },
+      "test_deps": [
+        "coverage",
+        "pytest-cov",
+        "pytest-mock",
+        "pytest-timeout",
+        "pytest-xdist",
+        "tox"
+      ],
+      "docs": {
+        "has_readme": true,
+        "has_docs_dir": true,
+        "has_sphinx": true,
+        "has_mkdocs": false,
+        "readme_size": 1551
+      },
+      "file_counts": {
+        "total_py_files": 250,
+        "src_files": 126,
+        "test_files": 124,
+        "total_functions": 2243,
+        "total_lines": 34317
+      },
+      "all_files_count": 284,
+      "validation": {
+        "has_src_dir": true,
+        "has_test_dir": true,
+        "has_installable_package": true,
+        "has_documentation": true,
+        "estimated_stub_count": 2243,
+        "estimated_complexity": "massive"
+      }
+    },
+    "test_results": null,
+    "status": "pass",
+    "issues": []
+  },
+  {
+    "full_name": "Rapptz/discord.py",
+    "name": "discord.py",
+    "owner": "Rapptz",
+    "stars": 15400,
+    "default_branch": "master",
+    "description": "Discord API wrapper",
+    "analysis": {
+      "full_name": "Rapptz/discord.py",
+      "src_dir": "discord",
+      "test_dir": "tests",
+      "python_version": ">=3.8",
+      "install": {
+        "has_pyproject": true,
+        "has_setup_py": true,
+        "has_setup_cfg": false,
+        "build_backend": "setuptools.build_meta",
+        "extra_deps": [
+          "test",
+          "dev"
+        ]
+      },
+      "test_deps": [
+        "coverage",
+        "pytest-asyncio",
+        "pytest-cov",
+        "pytest-mock"
+      ],
+      "docs": {
+        "has_readme": true,
+        "has_docs_dir": true,
+        "has_sphinx": true,
+        "has_mkdocs": false,
+        "readme_size": 3199
+      },
+      "file_counts": {
+        "total_py_files": 199,
+        "src_files": 183,
+        "test_files": 16,
+        "total_functions": 4852,
+        "total_lines": 97301
+      },
+      "all_files_count": 295,
+      "validation": {
+        "has_src_dir": true,
+        "has_test_dir": true,
+        "has_installable_package": true,
+        "has_documentation": true,
+        "estimated_stub_count": 4852,
+        "estimated_complexity": "massive"
+      }
+    },
+    "test_results": null,
+    "status": "pass",
+    "issues": []
+  },
+  {
+    "full_name": "dbader/schedule",
+    "name": "schedule",
+    "owner": "dbader",
+    "stars": 12200,
+    "default_branch": "master",
+    "description": "Job scheduler",
+    "analysis": {
+      "full_name": "dbader/schedule",
+      "src_dir": "schedule",
+      "test_dir": null,
+      "python_version": ">= 3.7",
+      "install": {
+        "has_pyproject": true,
+        "has_setup_py": true,
+        "has_setup_cfg": true,
+        "build_backend": "setuptools.build_meta",
+        "extra_deps": []
+      },
+      "test_deps": [
+        "pytest-cov"
+      ],
+      "docs": {
+        "has_readme": true,
+        "has_docs_dir": true,
+        "has_sphinx": true,
+        "has_mkdocs": false,
+        "readme_size": 2288
+      },
+      "file_counts": {
+        "total_py_files": 4,
+        "src_files": 3,
+        "test_files": 1,
+        "total_functions": 161,
+        "total_lines": 2972
+      },
+      "all_files_count": 30,
+      "validation": {
+        "has_src_dir": true,
+        "has_test_dir": false,
+        "has_installable_package": true,
+        "has_documentation": true,
+        "estimated_stub_count": 161,
+        "estimated_complexity": "medium"
+      }
+    },
+    "test_results": null,
+    "status": "fail",
+    "issues": [
+      "no_test_dir"
+    ]
+  },
+  {
+    "full_name": "pytransitions/transitions",
+    "name": "transitions",
+    "owner": "pytransitions",
+    "stars": 5800,
+    "default_branch": "master",
+    "description": "State machine library",
+    "analysis": {
+      "full_name": "pytransitions/transitions",
+      "src_dir": "transitions",
+      "test_dir": "tests",
+      "python_version": null,
+      "install": {
+        "has_pyproject": false,
+        "has_setup_py": true,
+        "has_setup_cfg": true,
+        "build_backend": null,
+        "extra_deps": []
+      },
+      "test_deps": [
+        "tox"
+      ],
+      "docs": {
+        "has_readme": true,
+        "has_docs_dir": false,
+        "has_sphinx": false,
+        "has_mkdocs": false,
+        "readme_size": 98868
+      },
+      "file_counts": {
+        "total_py_files": 39,
+        "src_files": 19,
+        "test_files": 20,
+        "total_functions": 887,
+        "total_lines": 12562
+      },
+      "all_files_count": 75,
+      "validation": {
+        "has_src_dir": true,
+        "has_test_dir": true,
+        "has_installable_package": true,
+        "has_documentation": false,
+        "estimated_stub_count": 887,
+        "estimated_complexity": "large"
+      }
+    },
+    "test_results": null,
+    "status": "pass",
+    "issues": []
+  }
+]

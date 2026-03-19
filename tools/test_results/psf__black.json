@@ -1,0 +1,14 @@
+{
+  "repo": "black",
+  "status": "completed",
+  "test_count": "402",
+  "passed": "0",
+  "failed": "0",
+  "errors": "0",
+  "skipped": "0",
+  "coverage": "",
+  "duration_seconds": 1,
+  "timed_out": false,
+  "exit_code": 0,
+  "exceeds_30min": false
+}

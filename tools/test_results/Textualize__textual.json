@@ -1,0 +1,14 @@
+{
+  "repo": "textual",
+  "status": "completed",
+  "test_count": "3422",
+  "passed": "0",
+  "failed": "0",
+  "errors": "0",
+  "skipped": "0",
+  "coverage": "55%",
+  "duration_seconds": 14,
+  "timed_out": false,
+  "exit_code": 0,
+  "exceeds_30min": false
+}

@@ -217,9 +217,38 @@ SPLIT_PARSEL = ["parsel"]
 SPLIT_WCWIDTH = ["wcwidth"]
 SPLIT_DEPRECATED = ["deprecated"]
 
+# Ethara-Ai custom dataset splits (8 repos, strict Section 3.1 compliance)
+# Criteria: >95% Python, native implementations, docs website, >90% coverage, <30min tests
+SPLIT_ETHARA = [
+    "rich",
+    "black",
+    "typer",
+    "httpx",
+    "starlette",
+    "boto3",
+    "arrow",
+    "gspread",
+]
+SPLIT_ETHARA_LITE = [
+    "arrow",
+    "gspread",
+    "typer",
+    "httpx",
+]
+SPLIT_RICH = ["rich"]
+SPLIT_BLACK = ["black"]
+SPLIT_TYPER = ["typer"]
+SPLIT_HTTPX = ["httpx"]
+SPLIT_STARLETTE = ["starlette"]
+SPLIT_BOTO3 = ["boto3"]
+SPLIT_ARROW = ["arrow"]
+SPLIT_GSPREAD = ["gspread"]
+
 SPLIT = {
     "all": SPLIT_ALL,
     "lite": SPLIT_LITE,
+    "ethara": SPLIT_ETHARA,
+    "ethara-lite": SPLIT_ETHARA_LITE,
     "statsmodels": SPLIT_STATSMODELS,
     "python-progressbar": SPLIT_PYTHON_PROGRESSBAR,
     "xarray": SPLIT_XARRAY,
@@ -276,6 +305,14 @@ SPLIT = {
     "parsel": SPLIT_PARSEL,
     "wcwidth": SPLIT_WCWIDTH,
     "deprecated": SPLIT_DEPRECATED,
+    "rich": SPLIT_RICH,
+    "black": SPLIT_BLACK,
+    "typer": SPLIT_TYPER,
+    "httpx": SPLIT_HTTPX,
+    "starlette": SPLIT_STARLETTE,
+    "boto3": SPLIT_BOTO3,
+    "arrow": SPLIT_ARROW,
+    "gspread": SPLIT_GSPREAD,
 }
 
 

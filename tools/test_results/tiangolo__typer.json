@@ -1,0 +1,14 @@
+{
+  "repo": "typer",
+  "status": "completed",
+  "test_count": "1162",
+  "passed": "0",
+  "failed": "0",
+  "errors": "0",
+  "skipped": "0",
+  "coverage": "35%",
+  "duration_seconds": 294,
+  "timed_out": false,
+  "exit_code": 0,
+  "exceeds_30min": false
+}

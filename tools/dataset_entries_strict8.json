@@ -1,0 +1,186 @@
+[
+  {
+    "instance_id": "commit-0/rich",
+    "repo": "Ethara-Ai/rich",
+    "original_repo": "Textualize/rich",
+    "base_commit": "0add9e51e98332d7210b9f45dcda334e2d385ce7",
+    "reference_commit": "fc41075a3206d2a5fd846c6f41c4d2becab814fa",
+    "setup": {
+      "install": "pip install -e \".\"",
+      "packages": "",
+      "pip_packages": [
+        "pytest",
+        "pytest-json-report"
+      ],
+      "pre_install": [],
+      "python": "3.12",
+      "specification": "https://rich.readthedocs.io/en/latest/"
+    },
+    "test": {
+      "test_cmd": "pytest",
+      "test_dir": "tests"
+    },
+    "src_dir": "rich"
+  },
+  {
+    "instance_id": "commit-0/black",
+    "repo": "Ethara-Ai/black",
+    "original_repo": "psf/black",
+    "base_commit": "1ff640f33ce8243b3a12291448c365c54a2553b5",
+    "reference_commit": "28167fc7c071475c88e00419dac06722a7b5168d",
+    "setup": {
+      "install": "pip install -e \".[tests]\"",
+      "packages": "",
+      "pip_packages": [
+        "pytest",
+        "pytest-json-report"
+      ],
+      "pre_install": [],
+      "python": "3.10",
+      "specification": "https://black.readthedocs.io/"
+    },
+    "test": {
+      "test_cmd": "pytest",
+      "test_dir": "tests"
+    },
+    "src_dir": "src/black"
+  },
+  {
+    "instance_id": "commit-0/typer",
+    "repo": "Ethara-Ai/typer",
+    "original_repo": "tiangolo/typer",
+    "base_commit": "73071699e7add5adc81fff248f59a4e1e3600fa7",
+    "reference_commit": "f47d887d4c3ecc7f3b8e7cc92ce8cc1d56914e3f",
+    "setup": {
+      "install": "pip install -e \".[tests]\"",
+      "packages": "",
+      "pip_packages": [
+        "pytest",
+        "pytest-json-report"
+      ],
+      "pre_install": [],
+      "python": "3.10",
+      "specification": "https://typer.tiangolo.com"
+    },
+    "test": {
+      "test_cmd": "pytest",
+      "test_dir": "tests"
+    },
+    "src_dir": "typer"
+  },
+  {
+    "instance_id": "commit-0/httpx",
+    "repo": "Ethara-Ai/httpx",
+    "original_repo": "encode/httpx",
+    "base_commit": "875d5db3aef0142e7e7ecb0c4cb05819cb7064dd",
+    "reference_commit": "b5addb64f0161ff6bfe94c124ef76f6a1fba5254",
+    "setup": {
+      "install": "pip install -e \".\"",
+      "packages": "",
+      "pip_packages": [
+        "pytest",
+        "pytest-json-report"
+      ],
+      "pre_install": [],
+      "python": "3.9",
+      "specification": "https://www.python-httpx.org"
+    },
+    "test": {
+      "test_cmd": "pytest",
+      "test_dir": "tests"
+    },
+    "src_dir": "httpx"
+  },
+  {
+    "instance_id": "commit-0/starlette",
+    "repo": "Ethara-Ai/starlette",
+    "original_repo": "encode/starlette",
+    "base_commit": "508a0d3ee5b25bc2f8a12461340ccbb2426f9bb3",
+    "reference_commit": "9ee951980bae776103715b66305f807d9e8245da",
+    "setup": {
+      "install": "pip install -e \".[dev]\"",
+      "packages": "",
+      "pip_packages": [
+        "pytest",
+        "pytest-json-report"
+      ],
+      "pre_install": [],
+      "python": "3.10",
+      "specification": "https://starlette.dev/"
+    },
+    "test": {
+      "test_cmd": "pytest",
+      "test_dir": "tests"
+    },
+    "src_dir": "starlette"
+  },
+  {
+    "instance_id": "commit-0/boto3",
+    "repo": "Ethara-Ai/boto3",
+    "original_repo": "boto/boto3",
+    "base_commit": "35e093f8fad973b3b4489e184e4a4c6aff7a070e",
+    "reference_commit": "d424ae25bd7751ceabcf42173eb604aad816bdb0",
+    "setup": {
+      "install": "pip install -e \".\"",
+      "packages": "",
+      "pip_packages": [
+        "pytest",
+        "pytest-json-report"
+      ],
+      "pre_install": [],
+      "python": "3.9",
+      "specification": "https://boto3.readthedocs.io/"
+    },
+    "test": {
+      "test_cmd": "pytest",
+      "test_dir": "tests"
+    },
+    "src_dir": "boto3"
+  },
+  {
+    "instance_id": "commit-0/arrow",
+    "repo": "Ethara-Ai/arrow",
+    "original_repo": "arrow-py/arrow",
+    "base_commit": "4d7f04be8343690c2686df59df836d2520413a52",
+    "reference_commit": "b423717da81aaf8117313b4b377efaa6413a9639",
+    "setup": {
+      "install": "pip install -e \".[test]\"",
+      "packages": "",
+      "pip_packages": [
+        "pytest",
+        "pytest-json-report"
+      ],
+      "pre_install": [],
+      "python": "3.8",
+      "specification": "https://arrow.readthedocs.io"
+    },
+    "test": {
+      "test_cmd": "pytest",
+      "test_dir": "tests"
+    },
+    "src_dir": "arrow"
+  },
+  {
+    "instance_id": "commit-0/gspread",
+    "repo": "Ethara-Ai/gspread",
+    "original_repo": "burnash/gspread",
+    "base_commit": "0bc207630f1a78dc726e98a59484ca5bbe7bd86e",
+    "reference_commit": "1fb4ba7d37f5630e1f973159917bb91f8fda295e",
+    "setup": {
+      "install": "pip install -e \".\"",
+      "packages": "",
+      "pip_packages": [
+        "pytest",
+        "pytest-json-report"
+      ],
+      "pre_install": [],
+      "python": "3.8",
+      "specification": "https://gspread.readthedocs.io/en/latest/"
+    },
+    "test": {
+      "test_cmd": "pytest",
+      "test_dir": "tests"
+    },
+    "src_dir": "gspread"
+  }
+]

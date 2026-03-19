@@ -1,0 +1,14 @@
+{
+  "repo": "boto3",
+  "status": "completed",
+  "test_count": "1553",
+  "passed": "0",
+  "failed": "0",
+  "errors": "0",
+  "skipped": "0",
+  "coverage": "93%",
+  "duration_seconds": 603,
+  "timed_out": false,
+  "exit_code": 0,
+  "exceeds_30min": false
+}

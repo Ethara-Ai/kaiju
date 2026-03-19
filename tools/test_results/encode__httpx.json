@@ -1,0 +1,14 @@
+{
+  "repo": "httpx",
+  "status": "completed",
+  "test_count": "0",
+  "passed": "0",
+  "failed": "0",
+  "errors": "0",
+  "skipped": "0",
+  "coverage": "",
+  "duration_seconds": 0,
+  "timed_out": false,
+  "exit_code": 0,
+  "exceeds_30min": false
+}
