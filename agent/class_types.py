@@ -22,3 +22,4 @@ class AgentConfig:
     run_tests: bool
     max_iteration: int
     record_test_for_each_commit: bool
+    cache_prompts: bool = True

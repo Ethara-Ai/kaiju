@@ -58,7 +58,11 @@ def run_agent_for_repo(
         )
 
     if agent_config.agent_name == "aider":
-        agent = AiderAgents(agent_config.max_iteration, agent_config.model_name)
+        agent = AiderAgents(
+            agent_config.max_iteration,
+            agent_config.model_name,
+            agent_config.cache_prompts,
+        )
     else:
         raise NotImplementedError(
             f"{agent_config.agent_name} is not implemented; please add your implementations in baselines/agents.py."

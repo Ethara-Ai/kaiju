@@ -139,6 +139,10 @@ def config(
         False,
         help="Record the test for each commit",
     ),
+    cache_prompts: bool = typer.Option(
+        True,
+        help="Enable LLM prompt caching to reduce API costs",
+    ),
     pre_commit_config_path: str = typer.Option(
         ".pre-commit-config.yaml",
         help="Path to the pre-commit config file",
@@ -175,6 +179,7 @@ def config(
         "run_entire_dir_lint": run_entire_dir_lint,
         "pre_commit_config_path": pre_commit_config_path,
         "record_test_for_each_commit": record_test_for_each_commit,
+        "cache_prompts": cache_prompts,
     }
 
     write_agent_config(agent_config_file, agent_config)

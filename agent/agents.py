@@ -59,9 +59,12 @@ class AiderReturn(AgentReturn):
 
 
 class AiderAgents(Agents):
-    def __init__(self, max_iteration: int, model_name: str):
+    def __init__(
+        self, max_iteration: int, model_name: str, cache_prompts: bool = False
+    ):
         super().__init__(max_iteration)
         self.model = Model(model_name)
+        self.cache_prompts = cache_prompts
         # Check if API key is set for the model
         if "gpt" in model_name:
             api_key = os.environ.get("OPENAI_API_KEY", None)
@@ -131,6 +134,7 @@ class AiderAgents(Agents):
             lint_cmds={"python": lint_cmd},
             test_cmd=test_cmd,
             io=io,
+            cache_prompts=self.cache_prompts,
         )
         coder.max_reflections = self.max_iteration
         coder.stream = True
