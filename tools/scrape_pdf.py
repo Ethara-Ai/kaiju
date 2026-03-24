@@ -61,6 +61,15 @@ SKIP_URL_PATTERNS: dict[str, list[str]] = {
     "seaborn": [".png"],
 }
 
+CAPTCHA_MARKERS = [
+    "This website uses a security service to protect against malicious bots",
+    "This page is displayed while the website verifies you are not a bot",
+    "Checking if the site connection is secure",
+    "Enable JavaScript and cookies to continue",
+    "Verify you are human",
+    "Please verify you are a human",
+]
+
 FASTAPI_NON_ENGLISH_PREFIXES = frozenset(
     [
         "az",
@@ -95,6 +104,13 @@ def _is_page_blank(page: Any) -> bool:
     return not text.strip()
 
 
+def _is_captcha_page(page: Any) -> bool:
+    """Check if a PDF page contains bot-verification / CAPTCHA content."""
+    text = page.get_text("text")
+    text_lower = text.lower()
+    return any(marker.lower() in text_lower for marker in CAPTCHA_MARKERS)
+
+
 def _remove_blank_pages(pdf_path: str) -> None:
     document = fitz.open(pdf_path)
     if document.page_count < 2:
@@ -102,10 +118,20 @@ def _remove_blank_pages(pdf_path: str) -> None:
         return
 
     output_document = fitz.open()
+    removed_captcha = 0
     for i in range(document.page_count):
         page = document.load_page(i)
-        if not _is_page_blank(page):
-            output_document.insert_pdf(document, from_page=i, to_page=i)
+        if _is_page_blank(page):
+            continue
+        if _is_captcha_page(page):
+            removed_captcha += 1
+            continue
+        output_document.insert_pdf(document, from_page=i, to_page=i)
+
+    if removed_captcha:
+        logger.info(
+            "  Removed %d captcha/bot-check page(s) from %s", removed_captcha, pdf_path
+        )
 
     output_document.save(pdf_path)
     output_document.close()
