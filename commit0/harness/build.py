@@ -1,12 +1,12 @@
 import logging
 
 import docker
-from datasets import load_dataset
 from typing import Iterator, Union
 
 from commit0.harness.constants import RepoInstance, SimpleInstance, SPLIT
 from commit0.harness.docker_build import build_repo_images
 from commit0.harness.spec import make_spec
+from commit0.harness.utils import load_dataset_from_config
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -21,7 +21,7 @@ def main(
     num_workers: int,
     verbose: int,
 ) -> None:
-    dataset: Iterator[Union[RepoInstance, SimpleInstance]] = load_dataset(
+    dataset: Iterator[Union[RepoInstance, SimpleInstance]] = load_dataset_from_config(
         dataset_name, split=dataset_split
     )  # type: ignore
     specs = []
@@ -43,8 +43,12 @@ def main(
                 continue
         else:
             repo_name = example["repo"].split("/")[-1]
-            if split != "all" and repo_name not in SPLIT[split]:
-                continue
+            if split != "all":
+                if split in SPLIT:
+                    if repo_name not in SPLIT[split]:
+                        continue
+                else:
+                    pass
         spec = make_spec(example, dataset_type, absolute=True)
         specs.append(spec)
 

@@ -301,6 +301,22 @@ def get_language_breakdown(full_name: str, token: str | None = None) -> dict[str
     return github_api(f"/repos/{full_name}/languages", token=token)
 
 
+def get_latest_release_tag(full_name: str, token: str | None = None) -> str | None:
+    """Get the latest release tag name, falling back to the most recent tag."""
+    try:
+        release = github_api(f"/repos/{full_name}/releases/latest", token=token)
+        return release.get("tag_name")
+    except Exception:
+        pass
+    try:
+        tags = github_api(f"/repos/{full_name}/tags?per_page=1", token=token)
+        if tags and isinstance(tags, list) and len(tags) > 0:
+            return tags[0].get("name")
+    except Exception:
+        pass
+    return None
+
+
 def compute_python_percentage(languages: dict[str, int]) -> float:
     """Compute Python % of total code bytes."""
     total = sum(languages.values())
@@ -404,6 +420,13 @@ def enrich_candidates(
             t in repo.get("topics", []) for t in ["documentation", "docs"]
         )
         repo["has_docs"] = has_docs
+
+        # Get latest release tag for commit pinning
+        try:
+            release_tag = get_latest_release_tag(full_name, token=token)
+            repo["release_tag"] = release_tag
+        except Exception:
+            repo["release_tag"] = None
 
         logger.info(
             "  CANDIDATE: %s — %.1f%% Python, %d stars, pytest=%s, docs=%s",

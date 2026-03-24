@@ -3,7 +3,7 @@ Prepare repos for a commit0 dataset.
 
 For each validated candidate:
 1. Fork to Ethara-Ai GitHub org
-2. Create a 'commit0_combined' branch
+2. Create a 'commit0_{removal_mode}' branch (e.g., commit0_combined)
 3. Apply AST stubbing (replace function bodies with pass)
 4. Commit stubbed version as base_commit
 5. Reset to original as reference_commit
@@ -152,30 +152,36 @@ def fork_repo(full_name: str, org: str, token: str | None = None) -> str:
     raise RuntimeError(f"Fork {fork_name} not available after 20s")
 
 
-def full_clone(full_name: str, clone_dir: Path, branch: str | None = None) -> Path:
+def full_clone(
+    full_name: str, clone_dir: Path, branch: str | None = None, tag: str | None = None
+) -> Path:
     """Full clone (not shallow) of a repo. Returns repo dir."""
     repo_dir = clone_dir / full_name.replace("/", "__")
     if repo_dir.exists():
-        # Make sure it's a full clone, not shallow
         shallow_file = repo_dir / ".git" / "shallow"
         if shallow_file.exists():
             logger.info("  Unshallowing existing clone...")
             git(repo_dir, "fetch", "--unshallow", check=False, timeout=300)
+        if tag:
+            git(repo_dir, "fetch", "--tags", timeout=120)
+            git(repo_dir, "checkout", tag, check=False)
         return repo_dir
 
     url = f"https://github.com/{full_name}.git"
+    ref = tag or branch
     cmd = ["git", "clone", url, str(repo_dir)]
-    if branch:
-        cmd = ["git", "clone", "--branch", branch, url, str(repo_dir)]
+    if ref:
+        cmd = ["git", "clone", "--branch", ref, url, str(repo_dir)]
 
     try:
         subprocess.run(cmd, capture_output=True, text=True, timeout=600, check=True)
     except subprocess.CalledProcessError:
-        # Retry without branch
-        if branch and repo_dir.exists():
+        if ref and repo_dir.exists():
             shutil.rmtree(repo_dir)
         cmd = ["git", "clone", url, str(repo_dir)]
         subprocess.run(cmd, capture_output=True, text=True, timeout=600, check=True)
+        if tag:
+            git(repo_dir, "checkout", tag, check=False)
 
     return repo_dir
 
@@ -187,7 +193,7 @@ def create_stubbed_branch(
     repo_dir: Path,
     full_name: str,
     src_dir: str | None,
-    branch_name: str = "commit0_combined",
+    branch_name: str | None = None,
     removal_mode: str = "combined",
 ) -> tuple[str, str]:
     """
@@ -197,10 +203,12 @@ def create_stubbed_branch(
 
     Workflow:
     1. Record the current HEAD as reference_commit
-    2. Create branch 'commit0_combined'
+    2. Create branch 'commit0_{removal_mode}'
     3. Run stub.py on source files
     4. Commit stubbed version as base_commit
     """
+    if branch_name is None:
+        branch_name = f"commit0_{removal_mode}"
     default_branch = get_default_branch(repo_dir)
     reference_commit = get_head_sha(repo_dir)
     logger.info("  Reference commit (original): %s", reference_commit[:12])
@@ -285,9 +293,7 @@ def create_stubbed_branch(
             repo_dir,
             "commit",
             "-m",
-            f"commit0: stub function bodies for {full_name.split('/')[-1]}\n\n"
-            f"Automated stubbing (mode={removal_mode}): {stubbed_count} files modified\n"
-            f"Reference implementation: {reference_commit[:12]}",
+            "Commit 0",
         )
         base_commit = get_head_sha(repo_dir)
 
@@ -413,19 +419,29 @@ def generate_test_dict(repo_dir: Path, test_dir: str | None) -> dict:
 
 
 def _detect_python_version(repo_dir: Path) -> str | None:
-    """Extract minimum Python version as X.Y string."""
+    """Extract minimum Python version as X.Y string.
+
+    Clamps to versions available in the Docker base image (3.10, 3.12).
+    """
+    AVAILABLE_VERSIONS = [(3, 10), (3, 12)]
+
     for config_name in ["pyproject.toml", "setup.cfg", "setup.py"]:
         config = repo_dir / config_name
         if not config.exists():
             continue
         content = config.read_text(errors="replace")
 
-        # Match patterns like >=3.8, >=3.9, etc.
         m = re.search(
             r'(?:requires-python|python_requires)\s*=\s*["\']?>=?\s*(\d+\.\d+)', content
         )
         if m:
-            return m.group(1)
+            raw = m.group(1)
+            parts = raw.split(".")
+            major, minor = int(parts[0]), int(parts[1])
+            for av_major, av_minor in AVAILABLE_VERSIONS:
+                if (av_major, av_minor) >= (major, minor):
+                    return f"{av_major}.{av_minor}"
+            return f"{AVAILABLE_VERSIONS[-1][0]}.{AVAILABLE_VERSIONS[-1][1]}"
 
     return None
 
@@ -460,13 +476,13 @@ def create_dataset_entry(
     src_dir: str,
     setup_dict: dict,
     test_dict: dict,
+    pinned_tag: str | None = None,
 ) -> dict:
-    """Create a RepoInstance-compatible dataset entry."""
     repo_name = full_name.split("/")[-1]
 
-    return {
+    entry = {
         "instance_id": f"commit-0/{repo_name}",
-        "repo": fork_name,  # Full org/repo path (e.g., "Ethara-Ai/flask")
+        "repo": fork_name,
         "original_repo": full_name,
         "base_commit": base_commit,
         "reference_commit": reference_commit,
@@ -474,6 +490,9 @@ def create_dataset_entry(
         "test": test_dict,
         "src_dir": src_dir or "",
     }
+    if pinned_tag:
+        entry["pinned_tag"] = pinned_tag
+    return entry
 
 
 # ─── Push to Fork ────────────────────────────────────────────────────────────
@@ -482,10 +501,13 @@ def create_dataset_entry(
 def push_to_fork(
     repo_dir: Path,
     fork_name: str,
-    branch: str = "commit0_combined",
+    branch: str | None = None,
+    removal_mode: str = "combined",
     token: str | None = None,
 ) -> None:
     """Add fork as remote and push the commit0 branch."""
+    if branch is None:
+        branch = f"commit0_{removal_mode}"
     # Add fork as remote
     if token:
         fork_url = f"https://x-access-token:{token}@github.com/{fork_name}.git"
@@ -513,15 +535,13 @@ def prepare_repos(
     dry_run: bool = False,
     max_repos: int | None = None,
     removal_mode: str = "combined",
-    scrape_specs: bool = False,
     specs_dir: str = "./specs",
 ) -> list[dict]:
     """Prepare repos for the dataset."""
     token = os.environ.get("GITHUB_TOKEN")
     entries: list[dict] = []
 
-    if scrape_specs:
-        _get_scrape_func()
+    _get_scrape_func()
 
     for i, candidate in enumerate(candidates):
         if max_repos and i >= max_repos:
@@ -558,9 +578,12 @@ def prepare_repos(
                 logger.error("  Fork failed: %s", e)
                 continue
 
-        # Full clone
+        # Full clone (pinned to release tag if available)
+        release_tag = candidate.get("release_tag") or analysis.get("release_tag")
         try:
-            repo_dir = full_clone(full_name, clone_dir)
+            repo_dir = full_clone(full_name, clone_dir, tag=release_tag)
+            if release_tag:
+                logger.info("  Pinned to tag: %s", release_tag)
         except Exception as e:
             logger.error("  Clone failed: %s", e)
             continue
@@ -585,9 +608,9 @@ def prepare_repos(
         setup_dict = generate_setup_dict(repo_dir, full_name)
         test_dict = generate_test_dict(repo_dir, test_dir)
 
-        # Scrape spec PDF if requested and docs URL is available
+        # Scrape spec PDF and commit into repo
         spec_path = None
-        if scrape_specs and setup_dict.get("specification"):
+        if setup_dict.get("specification"):
             repo_name = full_name.split("/")[-1]
             docs_url = setup_dict["specification"]
             logger.info("  Scraping spec from: %s", docs_url)
@@ -601,8 +624,8 @@ def prepare_repos(
                 )
                 if spec_path:
                     logger.info("  Spec saved: %s", spec_path)
-                    # Copy spec into repo and commit (matching official build_dataset)
-                    git(repo_dir, "checkout", "commit0_combined")
+                    branch_name = f"commit0_{removal_mode}"
+                    git(repo_dir, "checkout", branch_name)
                     dest = repo_dir / Path(spec_path).name
                     shutil.copy2(spec_path, dest)
                     git(repo_dir, "add", dest.name)
@@ -617,9 +640,9 @@ def prepare_repos(
         # Push to fork
         if not dry_run:
             try:
-                # Switch to the stub branch for pushing
-                git(repo_dir, "checkout", "commit0_combined")
-                push_to_fork(repo_dir, fork_name, token=token)
+                branch_name = f"commit0_{removal_mode}"
+                git(repo_dir, "checkout", branch_name)
+                push_to_fork(repo_dir, fork_name, branch=branch_name, token=token)
             except Exception as e:
                 logger.error("  Push failed: %s", e)
                 # Continue anyway — entry is still useful for local work
@@ -633,6 +656,7 @@ def prepare_repos(
             src_dir=src_dir or "",
             setup_dict=setup_dict,
             test_dict=test_dict,
+            pinned_tag=release_tag,
         )
 
         logger.info("  Entry created: instance_id=%s", entry["instance_id"])
@@ -715,15 +739,22 @@ def main() -> None:
         help="Stub removal mode: all (replace all bodies), docstring (only functions with docstrings), combined (stub documented + remove undocumented). Default: combined",
     )
     parser.add_argument(
-        "--scrape-specs",
-        action="store_true",
-        help="Scrape library documentation into PDF specs (requires pyppeteer, PyMuPDF, PyPDF2)",
-    )
-    parser.add_argument(
         "--specs-dir",
         type=str,
         default="./specs",
         help="Directory to save scraped spec PDFs (default: ./specs)",
+    )
+    parser.add_argument(
+        "--tag",
+        type=str,
+        default=None,
+        help="Pin to a specific git tag (overrides auto-detected release_tag)",
+    )
+    parser.add_argument(
+        "--commit",
+        type=str,
+        default=None,
+        help="Pin to a specific git commit SHA",
     )
 
     args = parser.parse_args()
@@ -738,7 +769,8 @@ def main() -> None:
                 "stars": 0,
                 "default_branch": "main",
                 "status": "pass",
-                "analysis": None,  # Will be detected during prepare
+                "analysis": None,
+                "release_tag": args.tag or args.commit,
             }
         ]
     elif args.validated_file:
@@ -763,7 +795,6 @@ def main() -> None:
         dry_run=args.dry_run,
         max_repos=args.max_repos,
         removal_mode=args.removal_mode,
-        scrape_specs=args.scrape_specs,
         specs_dir=args.specs_dir,
     )
 

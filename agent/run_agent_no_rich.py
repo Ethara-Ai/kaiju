@@ -2,7 +2,6 @@ import os
 import yaml
 import multiprocessing
 from tqdm import tqdm
-from datasets import load_dataset
 from git import Repo
 from agent.agent_utils import (
     create_branch,
@@ -21,6 +20,7 @@ from agent.class_types import AgentConfig
 from commit0.harness.constants import SPLIT
 from commit0.harness.get_pytest_ids import main as get_tests
 from commit0.harness.constants import RUN_AGENT_LOG_DIR, RepoInstance
+from commit0.harness.utils import load_dataset_from_config
 from commit0.cli import read_commit0_config_file
 from pathlib import Path
 from datetime import datetime
@@ -41,7 +41,9 @@ def run_agent_for_repo(
     # get repo info
     commit0_config = read_commit0_config_file(commit0_config_file)
 
-    assert "commit0" in commit0_config["dataset_name"]
+    assert "commit0" in commit0_config["dataset_name"] or commit0_config[
+        "dataset_name"
+    ].endswith(".json")
     _, repo_name = example["repo"].split("/")
 
     # repo_name = repo_name.lower()
@@ -214,7 +216,7 @@ def run_agent(
     commit0_config_file = os.path.abspath(commit0_config_file)
     commit0_config = read_commit0_config_file(commit0_config_file)
 
-    dataset = load_dataset(
+    dataset = load_dataset_from_config(
         commit0_config["dataset_name"], split=commit0_config["dataset_split"]
     )
     filtered_dataset = [

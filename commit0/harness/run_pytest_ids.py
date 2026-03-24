@@ -2,7 +2,6 @@ import git
 import os
 import sys
 import traceback
-from datasets import load_dataset
 from pathlib import Path
 
 from typing import Iterator, Union
@@ -21,6 +20,7 @@ from commit0.harness.utils import (
     setup_logger,
     close_logger,
     extract_code_blocks,
+    load_dataset_from_config,
 )
 from commit0.harness.execution_context import (
     ExecutionBackend,
@@ -49,7 +49,7 @@ def main(
     Tests are run either locally through docker
     or remotely through Modal.
     """
-    dataset: Iterator[Union[RepoInstance, SimpleInstance]] = load_dataset(
+    dataset: Iterator[Union[RepoInstance, SimpleInstance]] = load_dataset_from_config(
         dataset_name, split=dataset_split
     )  # type: ignore
     dataset_name = dataset_name.lower()

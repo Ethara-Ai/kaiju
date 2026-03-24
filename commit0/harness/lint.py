@@ -1,13 +1,13 @@
 import subprocess
 import sys
 import os
-from datasets import load_dataset
 from pathlib import Path
 from typing import Iterator, Union, List
 
 from commit0.harness.constants import (
     RepoInstance,
 )
+from commit0.harness.utils import load_dataset_from_config
 
 
 config = """repos:
@@ -41,7 +41,9 @@ def main(
     files: Union[List[Path], None],
     base_dir: str,
 ) -> None:
-    dataset: Iterator[RepoInstance] = load_dataset(dataset_name, split=dataset_split)  # type: ignore
+    dataset: Iterator[RepoInstance] = load_dataset_from_config(
+        dataset_name, split=dataset_split
+    )  # type: ignore
     example = None
     repo_name = None
     for example in dataset:

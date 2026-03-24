@@ -4,14 +4,17 @@ import os
 from collections import Counter
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datasets import load_dataset
 from tqdm import tqdm
 from typing import Iterator, Union
 
 from commit0.harness.run_pytest_ids import main as run_tests
 from commit0.harness.get_pytest_ids import main as get_tests
 from commit0.harness.constants import RepoInstance, SPLIT, RUN_PYTEST_LOG_DIR
-from commit0.harness.utils import get_hash_string, get_active_branch
+from commit0.harness.utils import (
+    get_hash_string,
+    get_active_branch,
+    load_dataset_from_config,
+)
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -32,14 +35,23 @@ def main(
     num_workers: int,
     rebuild_image: bool,
 ) -> None:
-    dataset: Iterator[RepoInstance] = load_dataset(dataset_name, split=dataset_split)  # type: ignore
+    dataset: Iterator[RepoInstance] = load_dataset_from_config(
+        dataset_name, split=dataset_split
+    )  # type: ignore
     if "swe" in dataset_name.lower():
         if repo_split == "all":
             repos = dataset["instance_id"]  # type: ignore
         else:
             repos = [one for one in dataset["instance_id"] if repo_split in one]  # type: ignore
     else:
-        repos = SPLIT[repo_split]
+        repos = (
+            SPLIT[repo_split]
+            if repo_split in SPLIT
+            else [
+                ex["repo"].split("/")[-1]
+                for ex in load_dataset_from_config(dataset_name, split=dataset_split)
+            ]
+        )
     triples = []
     log_dirs = []
     for example in dataset:
@@ -48,8 +60,12 @@ def main(
             if repo_split != "all" and repo_split not in example["instance_id"]:
                 continue
         else:
-            if repo_split != "all" and repo_name not in SPLIT[repo_split]:
-                continue
+            if repo_split != "all":
+                if repo_split in SPLIT:
+                    if repo_name not in SPLIT[repo_split]:
+                        continue
+                else:
+                    pass
         hashed_test_ids = get_hash_string(example["test"]["test_dir"])
         if branch is None:
             git_path = os.path.join(base_dir, example["instance_id"])

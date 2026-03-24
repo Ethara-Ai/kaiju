@@ -3,10 +3,9 @@ import os
 
 import git
 
-from datasets import load_dataset
 from typing import Iterator
 from commit0.harness.constants import RepoInstance, SPLIT
-from commit0.harness.utils import create_repo_on_github
+from commit0.harness.utils import create_repo_on_github, load_dataset_from_config
 
 
 logging.basicConfig(
@@ -27,15 +26,21 @@ def main(
     if github_token is None:
         # Get GitHub token from environment variable if not provided
         github_token = os.environ.get("GITHUB_TOKEN")
-    dataset: Iterator[RepoInstance] = load_dataset(dataset_name, split=dataset_split)  # type: ignore
+    dataset: Iterator[RepoInstance] = load_dataset_from_config(
+        dataset_name, split=dataset_split
+    )  # type: ignore
     for example in dataset:
         repo_name = example["repo"].split("/")[-1]
         if "swe" in dataset_name.lower():
             if repo_split != "all" and repo_split not in example["instance_id"]:
                 continue
         else:
-            if repo_split != "all" and repo_name not in SPLIT[repo_split]:
-                continue
+            if repo_split != "all":
+                if repo_split in SPLIT:
+                    if repo_name not in SPLIT[repo_split]:
+                        continue
+                else:
+                    pass
         local_repo_path = f"{base_dir}/{repo_name}"
         github_repo_url = f"https://github.com/{owner}/{repo_name}.git"
         github_repo_url = github_repo_url.replace(

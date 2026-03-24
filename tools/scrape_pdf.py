@@ -1,28 +1,22 @@
-"""
-Scrape library documentation websites into PDF specifications.
+"""Scrape library documentation websites into PDF specifications.
 
 For each library, crawls its documentation website using a headless browser,
 generates a PDF per page, removes blank pages, merges into a single PDF,
 and optionally bz2-compresses the result.
 
 Usage:
-    # Single URL:
     python -m tools.scrape_pdf --url https://docs.python-requests.org/ --name requests
-
-    # From validated.json (uses 'specification' from setup dict or analysis):
     python -m tools.scrape_pdf --input validated.json --output-dir ./specs
-
-    # Compress output:
     python -m tools.scrape_pdf --url https://rich.readthedocs.io/ --name rich --compress
 
 Requires:
-    pip install pyppeteer PyMuPDF PyPDF2 beautifulsoup4 requests
+    pip install playwright PyMuPDF PyPDF2 beautifulsoup4 requests
+    playwright install chromium
 """
 
 from __future__ import annotations
 
 import argparse
-import asyncio
 import bz2
 import json
 import logging
@@ -34,23 +28,23 @@ from urllib.parse import urljoin, urlparse
 
 if TYPE_CHECKING:
     import fitz
-    import requests
+    import requests as requests_lib
     from bs4 import BeautifulSoup
     from PyPDF2 import PdfMerger
-    from pyppeteer import launch
+    from playwright.sync_api import Browser, Page
 
 try:
     import fitz  # type: ignore[no-redef]
-    import requests  # type: ignore[no-redef]
+    import requests as requests_lib  # type: ignore[no-redef]
     from bs4 import BeautifulSoup  # type: ignore[no-redef]
     from PyPDF2 import PdfMerger  # type: ignore[no-redef]
-    from pyppeteer import launch  # type: ignore[no-redef]
+    from playwright.sync_api import sync_playwright  # type: ignore[no-redef]
 
     _MISSING_DEPS = False
     _MISSING_DEP_MSG = ""
-except ImportError:
+except ImportError as _e:
     _MISSING_DEPS = True
-    _MISSING_DEP_MSG = "scrape_pdf requires: pip install pyppeteer PyMuPDF PyPDF2 beautifulsoup4 requests"
+    _MISSING_DEP_MSG = f"scrape_pdf requires: pip install playwright PyMuPDF PyPDF2 beautifulsoup4 requests && playwright install chromium ({_e})"
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -170,28 +164,21 @@ def _should_skip_url(current_url: str, base_url: str) -> bool:
     return False
 
 
-async def _generate_pdf(page: Any, url: str, output_dir: str) -> str:
+def _generate_pdf(page: Any, url: str, output_dir: str) -> str:
     pdf_path = ""
     try:
-        await page.goto(url, {"waitUntil": "networkidle2"})
+        page.goto(url, wait_until="networkidle", timeout=30000)
 
         out_name = f"{urlparse(url).path.replace('/', '_').strip('_')}.pdf"
         if out_name == ".pdf":
             out_name = "base.pdf"
         pdf_path = os.path.join(output_dir, out_name)
 
-        await page.pdf(
-            {
-                "path": pdf_path,
-                "printBackground": True,
-                "format": "A4",
-                "margin": {
-                    "top": "0px",
-                    "bottom": "0px",
-                    "left": "0px",
-                    "right": "0px",
-                },
-            }
+        page.pdf(
+            path=pdf_path,
+            print_background=True,
+            format="A4",
+            margin={"top": "0px", "bottom": "0px", "left": "0px", "right": "0px"},
         )
         logger.debug("  Saved PDF: %s", pdf_path)
     except Exception as e:
@@ -199,8 +186,8 @@ async def _generate_pdf(page: Any, url: str, output_dir: str) -> str:
     return pdf_path
 
 
-async def _crawl_website(browser: Any, base_url: str, output_dir: str) -> list[str]:
-    page = await browser.newPage()
+def _crawl_website(browser: Any, base_url: str, output_dir: str) -> list[str]:
+    page = browser.new_page()
     visited: set[str] = set()
     to_visit = [base_url]
     sequence: list[str] = []
@@ -218,12 +205,14 @@ async def _crawl_website(browser: Any, base_url: str, output_dir: str) -> list[s
         visited.add(current_url)
 
         try:
-            response = await page.goto(current_url, {"waitUntil": "domcontentloaded"})
-            if response.status == 404:
+            response = page.goto(
+                current_url, wait_until="domcontentloaded", timeout=30000
+            )
+            if response and response.status == 404:
                 logger.debug("  404: %s", current_url)
                 continue
 
-            content = await page.content()
+            content = page.content()
             soup = BeautifulSoup(content, "html.parser")
 
             for link in soup.find_all("a", href=True):
@@ -235,12 +224,13 @@ async def _crawl_website(browser: Any, base_url: str, output_dir: str) -> list[s
                 ):
                     to_visit.append(full_url)
 
-            pdf = await _generate_pdf(page, current_url, output_dir)
+            pdf = _generate_pdf(page, current_url, output_dir)
             if pdf:
                 sequence.append(pdf)
         except Exception as e:
             logger.warning("  Error crawling %s: %s", current_url, e)
 
+    page.close()
     return sequence
 
 
@@ -259,17 +249,12 @@ def _compress_bz2(input_path: str, output_path: str) -> None:
             f_out.writelines(f_in)
 
 
-async def scrape_spec(
+def scrape_spec(
     base_url: str,
     name: str,
     output_dir: str = "specs",
     compress: bool = True,
 ) -> str | None:
-    """
-    Scrape a documentation website into a single merged PDF.
-
-    Returns path to the final PDF (or .pdf.bz2 if compress=True), or None on failure.
-    """
     if _MISSING_DEPS:
         raise ImportError(_MISSING_DEP_MSG)
 
@@ -281,7 +266,7 @@ async def scrape_spec(
     if url_parts and url_parts[-1] == "pdf":
         logger.info("  Direct PDF download: %s", base_url)
         try:
-            response = requests.get(base_url, timeout=60)
+            response = requests_lib.get(base_url, timeout=60)
             response.raise_for_status()
             with open(final_pdf, "wb") as f:
                 f.write(response.content)
@@ -289,20 +274,21 @@ async def scrape_spec(
             logger.error("  Failed to download PDF: %s", e)
             return None
     else:
-        browser = await launch(args=["--no-sandbox"])
-        try:
-            os.makedirs(pages_dir, exist_ok=True)
-            pdfs = await _crawl_website(browser, base_url, pages_dir)
-            if not pdfs:
-                logger.warning("  No pages crawled for %s", name)
-                return None
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            try:
+                os.makedirs(pages_dir, exist_ok=True)
+                pdfs = _crawl_website(browser, base_url, pages_dir)
+                if not pdfs:
+                    logger.warning("  No pages crawled for %s", name)
+                    return None
 
-            _clean_pdf_directory(pdfs)
-            _merge_pdfs(pdfs, final_pdf)
-        finally:
-            await browser.close()
-            if os.path.isdir(pages_dir):
-                shutil.rmtree(pages_dir, ignore_errors=True)
+                _clean_pdf_directory(pdfs)
+                _merge_pdfs(pdfs, final_pdf)
+            finally:
+                browser.close()
+                if os.path.isdir(pages_dir):
+                    shutil.rmtree(pages_dir, ignore_errors=True)
 
     if not os.path.exists(final_pdf):
         return None
@@ -318,19 +304,8 @@ async def scrape_spec(
     return final_pdf
 
 
-def scrape_spec_sync(
-    base_url: str,
-    name: str,
-    output_dir: str = "specs",
-    compress: bool = True,
-) -> str | None:
-    loop = asyncio.new_event_loop()
-    try:
-        return loop.run_until_complete(
-            scrape_spec(base_url, name, output_dir, compress)
-        )
-    finally:
-        loop.close()
+# Alias for backward compatibility (was async, now sync)
+scrape_spec_sync = scrape_spec
 
 
 def main() -> None:
@@ -365,9 +340,7 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.url and args.name:
-        result = scrape_spec_sync(
-            args.url, args.name, args.output_dir, not args.no_compress
-        )
+        result = scrape_spec(args.url, args.name, args.output_dir, not args.no_compress)
         if result:
             print(f"Done: {result}")
         else:
@@ -409,9 +382,7 @@ def main() -> None:
                 continue
 
             logger.info("\nScraping spec for %s: %s", name, spec_url)
-            result = scrape_spec_sync(
-                spec_url, name, args.output_dir, not args.no_compress
-            )
+            result = scrape_spec(spec_url, name, args.output_dir, not args.no_compress)
             if result:
                 count += 1
                 logger.info("  [%d] Done: %s", count, result)

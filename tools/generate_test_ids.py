@@ -82,15 +82,44 @@ def collect_test_ids_local(
     return test_ids
 
 
+def _find_docker_image(repo_name: str) -> str | None:
+    """Find a built Docker image for this repo by searching commit0.repo.<name>.* tags."""
+    try:
+        result = subprocess.run(
+            ["docker", "images", "--format", "{{.Repository}}:{{.Tag}}"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            return None
+        needle = f"commit0.repo.{repo_name.lower()}"
+        for line in result.stdout.strip().split("\n"):
+            if line.startswith(needle):
+                return line
+        return None
+    except Exception:
+        return None
+
+
 def collect_test_ids_docker(
     repo_name: str,
     test_dir: str = "tests",
     image_name: str | None = None,
+    reference_commit: str | None = None,
     timeout: int = 300,
 ) -> list[str]:
-    """Run pytest --collect-only inside a Docker container."""
+    """Run pytest --collect-only inside a Docker container.
+
+    If reference_commit is provided, checks out the original (un-stubbed) code first
+    so that test collection doesn't fail on import errors from removed functions.
+    """
     if image_name is None:
-        image_name = f"commit0.repo.{repo_name.lower().replace('/', '_')}:v0"
+        image_name = _find_docker_image(repo_name)
+        if image_name is None:
+            image_name = f"commit0.repo.{repo_name.lower().replace('/', '_')}:v0"
+
+    checkout = f"git checkout {reference_commit} -- . && " if reference_commit else ""
 
     cmd = [
         "docker",
@@ -99,7 +128,7 @@ def collect_test_ids_docker(
         image_name,
         "bash",
         "-c",
-        f"cd /testbed && python -m pytest --collect-only -q --no-header {test_dir} 2>/dev/null",
+        f"cd /testbed && source .venv/bin/activate && {checkout}python -m pytest --collect-only -q --no-header {test_dir} 2>/dev/null",
     ]
 
     try:
@@ -237,6 +266,7 @@ def generate_for_dataset(
             test_ids = collect_test_ids_docker(
                 repo_name=repo_name,
                 test_dir=test_dir,
+                reference_commit=entry.get("reference_commit"),
                 timeout=timeout,
             )
         else:
@@ -268,6 +298,21 @@ def generate_for_dataset(
                 test_dir=test_dir,
                 timeout=timeout,
             )
+
+            if not test_ids:
+                docker_image = _find_docker_image(repo_name)
+                if docker_image:
+                    logger.info(
+                        "  Local collection returned 0 — retrying in Docker (%s)",
+                        docker_image,
+                    )
+                    test_ids = collect_test_ids_docker(
+                        repo_name=repo_name,
+                        test_dir=test_dir,
+                        image_name=docker_image,
+                        reference_commit=entry.get("reference_commit"),
+                        timeout=timeout,
+                    )
 
         if test_ids:
             out_file = save_test_ids(test_ids, repo_name, output_dir)

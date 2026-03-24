@@ -1,13 +1,14 @@
 import git
 import git.exc
 import hashlib
+import json
 import logging
 import os
 import time
 import re
 import sys
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import Any, Iterator, List, Optional, Union
 
 from fastcore.net import HTTP404NotFoundError, HTTP403ForbiddenError  # type: ignore
 from ghapi.core import GhApi
@@ -242,6 +243,45 @@ def extract_code_blocks(text: str) -> List[str]:
     pattern = r"```python\n(.*?)```"
     matches = re.finditer(pattern, text, re.DOTALL)
     return [match.group(1).strip() for match in matches]
+
+
+def load_dataset_from_config(dataset_name: str, split: str = "test") -> Iterator[Any]:
+    """Load dataset from a local JSON file path or a HuggingFace dataset identifier."""
+    local_path = None
+    if dataset_name.endswith(".json"):
+        local_path = dataset_name
+    elif os.sep in dataset_name or "/" in dataset_name:
+        # HF identifiers are "org/dataset" (one slash, no extension) — anything else is a path
+        parts = dataset_name.split("/")
+        if len(parts) != 2 or "." in parts[-1] or os.path.exists(dataset_name):
+            local_path = dataset_name
+
+    if local_path is not None:
+        resolved = Path(local_path).resolve()
+        if not resolved.exists():
+            raise FileNotFoundError(
+                f"Local dataset file not found: {resolved}\n"
+                f"If this is a HuggingFace dataset, remove the file extension."
+            )
+        with open(resolved) as f:
+            data = json.load(f)
+        if isinstance(data, dict) and "data" in data:
+            entries = data["data"]
+        elif isinstance(data, list):
+            entries = data
+        else:
+            raise ValueError(
+                f"Unexpected JSON structure in {resolved}. "
+                f"Expected a list or an object with a 'data' key."
+            )
+        logging.getLogger(__name__).info(
+            f"Loaded {len(entries)} entries from local dataset: {resolved}"
+        )
+        return iter(entries)
+
+    from datasets import load_dataset
+
+    return load_dataset(dataset_name, split=split)  # type: ignore
 
 
 __all__ = []
