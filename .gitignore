@@ -189,3 +189,10 @@ tools/create_dataset_pipeline.sh
 
 # Dataset pipeline workspace
 dataset_workspace/
+
+# Local-only artifacts
+.aider.tags.cache.v3/
+.sisyphus/
+docs/pipeline-architecture.md
+docs/repo-selection-checklist.md
+scripts/

@@ -437,11 +437,11 @@ log() { echo "[$(ts)] [${RUN_ID}] $1"; }
 # ============================================================
 
 write_commit0_config() {
-    local ds_value="$DATASET_FILE"
-    # Make local paths relative to BASE_DIR for portability
-    if [[ "$ds_value" == "${BASE_DIR}/"* ]]; then
-        ds_value="./${ds_value#${BASE_DIR}/}"
-    fi
+    # Use absolute path for dataset_name — relative paths break when
+    # DirContext cd's into repo dirs (e.g., commit0 lint/test subprocess
+    # resolves ./foo.json relative to repos/<repo>/ instead of project root).
+    local ds_value
+    ds_value="$(cd "$(dirname "$DATASET_FILE")" && pwd)/$(basename "$DATASET_FILE")"
 
     cat > "$COMMIT0_CONFIG" <<EOF
 base_dir: ${REPO_BASE}

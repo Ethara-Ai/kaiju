@@ -173,7 +173,7 @@ def build_image(
 
         nocache_flags = ["--no-cache"] if nocache else []
 
-        # Step 1: Build multi-arch OCI tarball for ECR push
+        # Step 1: Build multi-arch OCI tarball for ECR push (non-fatal)
         oci_dir = OCI_IMAGE_DIR / image_name.replace(":", "__")
         oci_dir.mkdir(parents=True, exist_ok=True)
         oci_tar_path = oci_dir / f"{image_name.replace(':', '__')}.tar"
@@ -197,8 +197,12 @@ def build_image(
         for line in (oci_result.stderr or "").splitlines():
             logger.info(ansi_escape.sub("", line))
         if oci_result.returncode != 0:
-            raise BuildImageError(image_name, oci_result.stderr, logger)
-        logger.info(f"OCI tarball saved to {oci_tar_path}")
+            logger.warning(
+                f"OCI tarball build failed (non-fatal, skipping ECR export): "
+                f"{oci_result.stderr.splitlines()[-1] if oci_result.stderr else 'unknown error'}"
+            )
+        else:
+            logger.info(f"OCI tarball saved to {oci_tar_path}")
 
         # Step 2: Load native-arch image into local daemon for immediate use
         native = _native_platform()
@@ -206,6 +210,8 @@ def build_image(
             "docker",
             "buildx",
             "build",
+            "--builder",
+            "default",
             "--platform",
             native,
             "--tag",
