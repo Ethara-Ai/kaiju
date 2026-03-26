@@ -33,20 +33,74 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 
+def _parse_collect_output(stdout: str) -> list[str]:
+    """Parse pytest --collect-only output in any format (verbose or quiet).
+
+    Handles:
+    - Verbose format: ``<Module tests/test_foo.py>::<Class TestFoo>::<Function test_bar>``
+    - Quiet format:   ``tests/test_foo.py::TestFoo::test_bar``
+    - Mixed output with separator lines, errors, and empty lines
+    """
+    test_ids: list[str] = []
+    for line in stdout.strip().split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        # Skip separator / summary / error lines
+        if line.startswith(("=", "-", "no tests ran")):
+            continue
+        if "error" in line.lower() and "::" not in line:
+            continue
+
+        # Verbose format: <Module path>::<Class name>::<Function name>
+        if line.startswith("<") and "::" in line:
+            # Extract node-id: strip <Type ...> wrappers
+            parts = line.split("::")
+            id_parts: list[str] = []
+            for part in parts:
+                part = part.strip()
+                if part.startswith("<") and part.endswith(">"):
+                    # <Module tests/test_foo.py> → tests/test_foo.py
+                    # <Class TestFoo> → TestFoo
+                    inner = part[1:-1]
+                    # First word is the type, rest is the name
+                    idx = inner.find(" ")
+                    if idx != -1:
+                        id_parts.append(inner[idx + 1 :])
+                    else:
+                        id_parts.append(inner)
+                elif part:
+                    id_parts.append(part)
+            if id_parts:
+                test_ids.append("::".join(id_parts))
+            continue
+
+        # Quiet format: path::class::method or path::method
+        if "::" in line:
+            test_id = line.split(" ")[0]
+            if test_id:
+                test_ids.append(test_id)
+
+    return test_ids
+
+
 def collect_test_ids_local(
     repo_dir: Path,
     test_dir: str = "tests",
     test_cmd: str = "pytest",
     timeout: int = 300,
 ) -> list[str]:
-    """Run pytest --collect-only in a local repo directory to discover test IDs."""
+    """Run pytest --collect-only in a local repo directory to discover test IDs.
+
+    Uses verbose output first (handles unittest-style tests), falls back to
+    quiet mode if verbose yields nothing.
+    """
+    # Try verbose first (handles unittest-style tests that don't show :: in -q mode)
     cmd = [
         sys.executable,
         "-m",
         "pytest",
         "--collect-only",
-        "-q",
-        "--no-header",
         test_dir,
     ]
 
@@ -62,22 +116,30 @@ def collect_test_ids_local(
         logger.warning("  pytest --collect-only timed out after %ds", timeout)
         return []
 
-    lines = result.stdout.strip().split("\n")
+    test_ids = _parse_collect_output(result.stdout)
 
-    test_ids = []
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        if line.startswith("=") or line.startswith("-"):
-            continue
-        if line.startswith("no tests ran"):
-            continue
-        if "error" in line.lower() and "::" not in line:
-            continue
-        if "::" in line:
-            test_id = line.split(" ")[0]
-            test_ids.append(test_id)
+    # Fallback: try quiet mode (faster, works for standard test suites)
+    if not test_ids:
+        cmd_q = [
+            sys.executable,
+            "-m",
+            "pytest",
+            "--collect-only",
+            "-q",
+            "--no-header",
+            test_dir,
+        ]
+        try:
+            result_q = subprocess.run(
+                cmd_q,
+                cwd=repo_dir,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+            test_ids = _parse_collect_output(result_q.stdout)
+        except subprocess.TimeoutExpired:
+            pass
 
     return test_ids
 
@@ -128,7 +190,7 @@ def collect_test_ids_docker(
         image_name,
         "bash",
         "-c",
-        f"cd /testbed && source .venv/bin/activate && {checkout}python -m pytest --collect-only -q --no-header {test_dir} 2>/dev/null",
+        f"cd /testbed && source .venv/bin/activate && {checkout}python -m pytest --collect-only {test_dir} 2>/dev/null",
     ]
 
     try:
@@ -142,20 +204,71 @@ def collect_test_ids_docker(
         logger.warning("  Docker pytest --collect-only timed out after %ds", timeout)
         return []
 
-    lines = result.stdout.strip().split("\n")
+    test_ids = _parse_collect_output(result.stdout)
 
-    test_ids = []
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        if line.startswith("=") or line.startswith("-"):
-            continue
-        if "::" in line:
-            test_id = line.split(" ")[0]
-            test_ids.append(test_id)
+    if not test_ids:
+        cmd_q = [
+            "docker",
+            "run",
+            "--rm",
+            image_name,
+            "bash",
+            "-c",
+            f"cd /testbed && source .venv/bin/activate && {checkout}python -m pytest --collect-only -q --no-header {test_dir} 2>/dev/null",
+        ]
+        try:
+            result_q = subprocess.run(
+                cmd_q,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+            test_ids = _parse_collect_output(result_q.stdout)
+        except subprocess.TimeoutExpired:
+            pass
 
     return test_ids
+
+
+def validate_base_commit_docker(
+    repo_name: str,
+    test_dir: str = "tests",
+    image_name: str | None = None,
+    timeout: int = 300,
+) -> tuple[int, str]:
+    """Run pytest --collect-only at base_commit (stubbed code) inside Docker.
+
+    Returns (tests_collected, stderr_snippet).
+    If tests_collected == 0, the stubbed code breaks imports and the pipeline will fail.
+    """
+    if image_name is None:
+        image_name = _find_docker_image(repo_name)
+        if image_name is None:
+            image_name = f"commit0.repo.{repo_name.lower().replace('/', '_')}:v0"
+
+    cmd = [
+        "docker",
+        "run",
+        "--rm",
+        image_name,
+        "bash",
+        "-c",
+        f"cd /testbed && source .venv/bin/activate && python -m pytest --collect-only {test_dir} 2>&1 | tail -20",
+    ]
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return 0, "timeout"
+
+    test_ids = _parse_collect_output(result.stdout)
+    stderr_snippet = result.stdout[-500:] if result.stdout else ""
+    return len(test_ids), stderr_snippet
 
 
 def save_test_ids(
@@ -233,6 +346,7 @@ def generate_for_dataset(
     clone_dir: Path | None = None,
     timeout: int = 300,
     max_repos: int | None = None,
+    validate_base: bool = False,
 ) -> dict[str, int]:
     """Generate test IDs for all repos in a dataset entries JSON file."""
     data = json.loads(dataset_path.read_text())
@@ -318,6 +432,25 @@ def generate_for_dataset(
             out_file = save_test_ids(test_ids, repo_name, output_dir)
             logger.info("  Saved %d test IDs to %s", len(test_ids), out_file)
             results[repo_name] = len(test_ids)
+
+            if validate_base and use_docker:
+                base_collected, stderr = validate_base_commit_docker(
+                    repo_name=repo_name,
+                    test_dir=test_dir,
+                    timeout=timeout,
+                )
+                if base_collected == 0:
+                    logger.warning(
+                        "  ⚠ BASE COMMIT VALIDATION FAILED: 0 tests collected at base_commit (stubbed code)."
+                        " The import chain is broken — pipeline will produce 0%% pass rate."
+                    )
+                    logger.warning("  Last output: %s", stderr[:200])
+                    results[repo_name] = -len(test_ids)
+                else:
+                    logger.info(
+                        "  ✓ Base commit validation: %d tests collected at base_commit",
+                        base_collected,
+                    )
         else:
             logger.warning("  No test IDs collected for %s", repo_name)
             results[repo_name] = 0
@@ -384,6 +517,11 @@ def main() -> None:
         default=None,
         help="Max repos to process",
     )
+    parser.add_argument(
+        "--validate-base",
+        action="store_true",
+        help="After collecting IDs at reference_commit, validate that base_commit (stubbed code) can also collect tests. Requires --docker.",
+    )
 
     args = parser.parse_args()
     output_dir = Path(args.output_dir)
@@ -420,6 +558,7 @@ def main() -> None:
             clone_dir=clone_dir,
             timeout=args.timeout,
             max_repos=args.max_repos,
+            validate_base=args.validate_base,
         )
 
         total = sum(results.values())
