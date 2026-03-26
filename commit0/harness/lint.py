@@ -1,3 +1,4 @@
+import shutil
 import subprocess
 import sys
 import os
@@ -11,7 +12,6 @@ from commit0.harness.utils import load_dataset_from_config
 
 
 config = """repos:
-# Standard hooks
 - repo: https://github.com/pre-commit/pre-commit-hooks
   rev: v4.3.0
   hooks:
@@ -19,19 +19,12 @@ config = """repos:
   - id: mixed-line-ending
 
 - repo: https://github.com/astral-sh/ruff-pre-commit
-  # Ruff version.
   rev: v0.6.1
   hooks:
-    # Run the linter.
     - id: ruff
       args: [ --fix ]
-    # Run the formatter.
     - id: ruff-format
-
-- repo: https://github.com/RobertCraigie/pyright-python
-  rev: v1.1.376
-  hooks:
-    - id: pyright"""
+"""
 
 
 def main(
@@ -76,7 +69,18 @@ def main(
     config_file = Path(".commit0.pre-commit-config.yaml")
     if not config_file.is_file():
         config_file.write_text(config)
-    command = ["pre-commit", "run", "--config", config_file, "--files"] + files
+    # Find pre-commit executable: prefer venv, then PATH
+    pre_commit_bin = os.path.join(os.path.dirname(sys.executable), "pre-commit")
+    if not os.path.isfile(pre_commit_bin):
+        pre_commit_bin = shutil.which("pre-commit")
+    if not pre_commit_bin:
+        raise FileNotFoundError(
+            "Error: pre-commit command not found. "
+            "Ensure it is installed in the active virtual environment."
+        )
+    command = [pre_commit_bin, "run", "--config", str(config_file), "--files"] + [
+        str(f) for f in files
+    ]
     try:
         result = subprocess.run(command, capture_output=True, text=True, check=True)
         print(result.stdout)
@@ -84,8 +88,8 @@ def main(
     except subprocess.CalledProcessError as e:
         print(e.output)
         sys.exit(e.returncode)
-    except FileNotFoundError:
-        raise FileNotFoundError("Error: pre-commit command not found. Is it installed?")
+    except FileNotFoundError as e:
+        raise FileNotFoundError(f"Error running pre-commit: {e}") from e
     except Exception as e:
         raise Exception(f"An unexpected error occurred: {e}")
 

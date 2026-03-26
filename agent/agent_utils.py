@@ -1,7 +1,9 @@
+import ast
 import bz2
 import git
 import os
 import re
+import sys
 from dataclasses import asdict
 from pathlib import Path
 from typing import List
@@ -28,34 +30,49 @@ last = "└── "
 
 
 def extract_function_stubs(file_path: Path) -> List[str]:
-    """Extract function stubs from a Python file, including type hints."""
+    """Extract function stubs from a Python file, including type hints.
+
+    Uses AST parsing instead of regex to avoid catastrophic backtracking
+    on complex type annotations (e.g. typing.Callable[..., typing.Any]).
+    """
     with open(file_path, "r") as file:
         content = file.read()
 
-    # Regular expression to match function definitions with optional type hints
-    # This pattern now stops at the colon that ends the function signature
-    pattern = (
-        r"def\s+(\w+)\s*\(((?:[^()]*|\([^()]*\))*)\)\s*(?:->\s*([\w\[\],\s|]+))?\s*:"
-    )
-    matches = re.findall(pattern, content)
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        return []
 
     stubs = []
-    for name, args, return_type in matches:
-        # Process arguments to include type hints
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        name = node.name
+        args = node.args
         processed_args = []
-        for arg in args.split(","):
-            arg = arg.strip()
-            if ":" in arg:
-                arg_name, arg_type = arg.split(":", 1)
-                processed_args.append(f"{arg_name.strip()}: {arg_type.strip()}")
-            else:
-                processed_args.append(arg)
+        for arg in args.args:
+            arg_str = arg.arg
+            if arg.annotation:
+                arg_str += f": {ast.unparse(arg.annotation)}"
+            processed_args.append(arg_str)
+        for arg in args.kwonlyargs:
+            arg_str = arg.arg
+            if arg.annotation:
+                arg_str += f": {ast.unparse(arg.annotation)}"
+            processed_args.append(arg_str)
+        if args.vararg:
+            va = f"*{args.vararg.arg}"
+            if args.vararg.annotation:
+                va += f": {ast.unparse(args.vararg.annotation)}"
+            processed_args.append(va)
+        if args.kwarg:
+            kw = f"**{args.kwarg.arg}"
+            if args.kwarg.annotation:
+                kw += f": {ast.unparse(args.kwarg.annotation)}"
+            processed_args.append(kw)
 
         args_str = ", ".join(processed_args)
-
-        # Include return type if present
-        return_annotation = f" -> {return_type.strip()}" if return_type else ""
-
+        return_annotation = f" -> {ast.unparse(node.returns)}" if node.returns else ""
         stubs.append(f"def {name}({args_str}){return_annotation}: ...")
 
     return stubs
@@ -248,6 +265,13 @@ def get_target_edit_files(
             if len(content.splitlines()) > 1500:
                 continue
             if "    pass" in content:
+                # Verify the file actually has stubs by checking it differs from
+                # the reference commit. Files with only abstract method `pass` or
+                # intentional no-ops will be identical and should be skipped.
+                rel_path = os.path.relpath(file_path, target_dir)
+                diff_output = local_repo.git.diff(reference_commit, "--", rel_path)
+                if not diff_output:
+                    continue
                 filtered_files.append(file_path)
     # Change to reference commit to get the correct dependencies
     local_repo.git.checkout(reference_commit)
@@ -265,9 +289,9 @@ def get_target_edit_files(
             raise ValueError(
                 "topological_sort_files should not be longer than filtered_files"
             )
-    assert len(topological_sort_files) == len(
-        filtered_files
-    ), "all files should be included"
+    assert len(topological_sort_files) == len(filtered_files), (
+        "all files should be included"
+    )
 
     # change to latest commit
     local_repo.git.checkout(branch)
@@ -324,9 +348,9 @@ def get_target_edit_files_from_patch(
                 raise ValueError(
                     "topological_sort_files should not be longer than target_files_list"
                 )
-        assert len(topological_sort_files) == len(
-            target_files_list
-        ), "all files should be included"
+        assert len(topological_sort_files) == len(target_files_list), (
+            "all files should be included"
+        )
 
         topological_sort_files = [
             file.replace(working_dir, "").lstrip("/") for file in topological_sort_files
@@ -549,7 +573,7 @@ def get_lint_cmd(repo_name: str, use_lint_info: bool, commit0_config_file: str) 
              the list of changed files. If False, returns an empty string.
 
     """
-    lint_cmd = "python -m commit0 lint "
+    lint_cmd = f"{sys.executable} -m commit0 lint "
     if use_lint_info:
         lint_cmd += (
             repo_name + " --commit0-config-file " + commit0_config_file + " --files "

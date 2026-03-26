@@ -97,7 +97,7 @@ class Spec(ABC):
         machine = _platform.machine().lower()
         if machine in ("aarch64", "arm64"):
             return "linux/arm64"
-        return "linux/x86_64"
+        return "linux/amd64"
 
     @abstractmethod
     def make_repo_script_list(self) -> list[str]:

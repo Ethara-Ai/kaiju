@@ -8,7 +8,7 @@ import time
 import re
 import sys
 from pathlib import Path
-from typing import Any, Iterator, List, Optional, Union
+from typing import Any, List, Optional, Union
 
 from fastcore.net import HTTP404NotFoundError, HTTP403ForbiddenError  # type: ignore
 from ghapi.core import GhApi
@@ -245,7 +245,7 @@ def extract_code_blocks(text: str) -> List[str]:
     return [match.group(1).strip() for match in matches]
 
 
-def load_dataset_from_config(dataset_name: str, split: str = "test") -> Iterator[Any]:
+def load_dataset_from_config(dataset_name: str, split: str = "test") -> Any:
     """Load dataset from a local JSON file path or a HuggingFace dataset identifier."""
     local_path = None
     if dataset_name.endswith(".json"):
@@ -277,7 +277,7 @@ def load_dataset_from_config(dataset_name: str, split: str = "test") -> Iterator
         logging.getLogger(__name__).info(
             f"Loaded {len(entries)} entries from local dataset: {resolved}"
         )
-        return iter(entries)
+        return entries
 
     from datasets import load_dataset
 

@@ -13,6 +13,7 @@ from agent.agent_utils import (
 )
 import json
 import subprocess
+import sys
 from agent.agents import AiderAgents
 from typing import Optional, Type, cast
 from types import TracebackType
@@ -50,7 +51,7 @@ def run_eval_after_each_commit(
     branch: str, backend: str, commit0_config_file: str
 ) -> str:
     """Run the eval command after each commit."""
-    eval_cmd = f"python -m commit0 evaluate --branch {branch} --backend {backend} --commit0-config-file {commit0_config_file} --timeout 100"
+    eval_cmd = f"{sys.executable} -m commit0 evaluate --branch {branch} --backend {backend} --commit0-config-file {commit0_config_file} --timeout 100"
     try:
         result = subprocess.run(
             eval_cmd, shell=True, capture_output=True, text=True, check=True
@@ -141,7 +142,9 @@ def run_agent_for_repo(
     )
     # Call the commit0 get-tests command to retrieve test files
     test_files_str = [xx for x in get_tests(repo_name, verbose=0) for xx in x]
-    test_files = sorted(list(set([i.split(":")[0] for i in test_files_str])))
+    test_files = sorted(
+        list(set([i.split(":")[0] for i in test_files_str if i.strip()]))
+    )
 
     # prepare the log dir
     experiment_log_dir = (
@@ -167,7 +170,7 @@ def run_agent_for_repo(
             # when unit test feedback is available, iterate over test files
             for test_file in test_files:
                 update_queue.put(("set_current_file", (repo_name, test_file)))
-                test_cmd = f"python -m commit0 test {repo_path} {test_file} --branch {branch} --backend {backend} --commit0-config-file {commit0_config_file} --timeout 100"
+                test_cmd = f"{sys.executable} -m commit0 test {repo_path} {test_file} --branch {branch} --backend {backend} --commit0-config-file {commit0_config_file} --timeout 100"
                 test_file_name = test_file.replace(".py", "").replace("/", "__")
                 test_log_dir = experiment_log_dir / test_file_name
                 lint_cmd = get_lint_cmd(
@@ -286,19 +289,26 @@ def run_agent(
     dataset = load_dataset_from_config(
         commit0_config["dataset_name"], split=commit0_config["dataset_split"]
     )
-    filtered_dataset = [
-        example
-        for example in dataset
-        if commit0_config["repo_split"] == "all"
-        or (
-            isinstance(example, dict)
+    repo_split = commit0_config["repo_split"]
+    if repo_split == "all":
+        filtered_dataset = list(dataset)
+    elif repo_split in SPLIT:
+        filtered_dataset = [
+            example
+            for example in dataset
+            if isinstance(example, dict)
             and "repo" in example
             and isinstance(example["repo"], str)
-            and example["repo"].split("/")[-1]
-            in SPLIT.get(commit0_config["repo_split"], [])
-        )
-    ]
-    assert len(filtered_dataset) > 0, "No examples available"
+            and example["repo"].split("/")[-1] in SPLIT[repo_split]
+        ]
+    else:
+        # Custom split not in SPLIT dict — include all entries from the dataset.
+        # The dataset JSON itself acts as the filter.
+        filtered_dataset = list(dataset)
+    assert len(filtered_dataset) > 0, (
+        f"No examples available for repo_split={repo_split!r}. "
+        f"If using a custom dataset, ensure the JSON file is non-empty."
+    )
 
     # if len(filtered_dataset) > 1:
     #     sys.stdout = open(os.devnull, "w")

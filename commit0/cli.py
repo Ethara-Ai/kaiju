@@ -122,6 +122,13 @@ def setup(
         check_valid(repo_split, SPLIT)
 
     base_dir = str(Path(base_dir).resolve())
+    # Resolve local JSON files to absolute paths, but don't touch HuggingFace identifiers.
+    # HF identifiers look like "org/dataset" (exactly one slash, no extension, no path separators).
+    # Local files: end with .json, or contain os.sep AND are NOT simple "org/name" patterns.
+    if dataset_name.endswith(".json"):
+        dataset_name = str(Path(dataset_name).resolve())
+    elif os.path.exists(dataset_name):
+        dataset_name = str(Path(dataset_name).resolve())
 
     typer.echo(f"Cloning repository for split: {highlight(repo_split, Colors.ORANGE)}")
     typer.echo(f"Dataset name: {highlight(dataset_name, Colors.ORANGE)}")
