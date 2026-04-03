@@ -31,7 +31,17 @@ import subprocess
 import sys
 import tempfile
 import time
+import platform as platform_mod
 from pathlib import Path
+
+
+def _get_docker_platform() -> str:
+    machine = platform_mod.machine()
+    arch = {"x86_64": "amd64", "aarch64": "arm64", "arm64": "arm64"}.get(
+        machine, "amd64"
+    )
+    return f"linux/{arch}"
+
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -322,6 +332,7 @@ def detect_test_deps(repo_dir: Path) -> list[str]:
         "setup.cfg",
         "setup.py",
         "requirements-test.txt",
+        "requirements-tests.txt",
         "requirements-dev.txt",
     ]:
         path = repo_dir / config_file
@@ -504,7 +515,7 @@ cat /tmp/coverage.json 2>/dev/null || echo '{{}}'
                 "run",
                 "--rm",
                 "--platform",
-                "linux/amd64",
+                _get_docker_platform(),
                 "--name",
                 container_name,
                 "-v",
@@ -590,6 +601,7 @@ def _build_install_script(repo_dir: Path) -> str:
             "requirements.txt",
             "requirements-dev.txt",
             "requirements-test.txt",
+            "requirements-tests.txt",
         ]
         cmds = []
         for f in req_files:

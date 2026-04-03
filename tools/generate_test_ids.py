@@ -29,8 +29,21 @@ import subprocess
 import sys
 from pathlib import Path
 
+import docker
+import docker.errors
+import platform as platform_mod
+import requests.exceptions
+
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
+
+
+def _get_docker_platform() -> str:
+    machine = platform_mod.machine()
+    arch = {"x86_64": "amd64", "aarch64": "arm64", "arm64": "arm64"}.get(
+        machine, "amd64"
+    )
+    return f"linux/{arch}"
 
 
 def _parse_collect_output(stdout: str) -> list[str]:
@@ -101,6 +114,9 @@ def collect_test_ids_local(
         "-m",
         "pytest",
         "--collect-only",
+        "--override-ini=addopts=",
+        "-p",
+        "no:cacheprovider",
         test_dir,
     ]
 
@@ -127,6 +143,9 @@ def collect_test_ids_local(
             "--collect-only",
             "-q",
             "--no-header",
+            "--override-ini=addopts=",
+            "-p",
+            "no:cacheprovider",
             test_dir,
         ]
         try:
@@ -147,18 +166,13 @@ def collect_test_ids_local(
 def _find_docker_image(repo_name: str) -> str | None:
     """Find a built Docker image for this repo by searching commit0.repo.<name>.* tags."""
     try:
-        result = subprocess.run(
-            ["docker", "images", "--format", "{{.Repository}}:{{.Tag}}"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode != 0:
-            return None
-        needle = f"commit0.repo.{repo_name.lower()}"
-        for line in result.stdout.strip().split("\n"):
-            if line.startswith(needle):
-                return line
+        client = docker.from_env()
+        short_name = repo_name.split("__")[-1].split("-")[0].lower()
+        needle = f"commit0.repo.{short_name}."
+        for image in client.images.list():
+            for tag in image.tags:
+                if tag.startswith(needle):
+                    return tag
         return None
     except Exception:
         return None
@@ -183,49 +197,65 @@ def collect_test_ids_docker(
 
     checkout = f"git checkout {reference_commit} -- . && " if reference_commit else ""
 
-    cmd = [
-        "docker",
-        "run",
-        "--rm",
-        image_name,
-        "bash",
-        "-c",
-        f"cd /testbed && source .venv/bin/activate && {checkout}python -m pytest --collect-only {test_dir} 2>/dev/null",
-    ]
+    client = docker.from_env()
+
+    bash_cmd = (
+        f"cd /testbed && source .venv/bin/activate && {checkout}"
+        f"python -m pytest --collect-only --override-ini='addopts=' "
+        f"-p no:cacheprovider {test_dir} 2>&1; true"
+    )
 
     try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
+        raw = client.containers.run(
+            image_name,
+            command=f"bash -c '{bash_cmd}'",
+            remove=True,
+            platform=_get_docker_platform(),
         )
-    except subprocess.TimeoutExpired:
+        stdout = (
+            raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else raw
+        )
+    except docker.errors.ContainerError as e:
+        raw_err = e.stderr
+        stdout = (
+            raw_err.decode("utf-8", errors="replace")
+            if isinstance(raw_err, bytes)
+            else (raw_err or "")
+        )
+    except requests.exceptions.ReadTimeout:
         logger.warning("  Docker pytest --collect-only timed out after %ds", timeout)
         return []
 
-    test_ids = _parse_collect_output(result.stdout)
+    test_ids = _parse_collect_output(stdout)
 
     if not test_ids:
-        cmd_q = [
-            "docker",
-            "run",
-            "--rm",
-            image_name,
-            "bash",
-            "-c",
-            f"cd /testbed && source .venv/bin/activate && {checkout}python -m pytest --collect-only -q --no-header {test_dir} 2>/dev/null",
-        ]
+        bash_cmd_q = (
+            f"cd /testbed && source .venv/bin/activate && {checkout}"
+            f"python -m pytest --collect-only -q --no-header --override-ini='addopts=' "
+            f"-p no:cacheprovider {test_dir} 2>&1; true"
+        )
         try:
-            result_q = subprocess.run(
-                cmd_q,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
+            raw_q = client.containers.run(
+                image_name,
+                command=f"bash -c '{bash_cmd_q}'",
+                remove=True,
+                platform=_get_docker_platform(),
             )
-            test_ids = _parse_collect_output(result_q.stdout)
-        except subprocess.TimeoutExpired:
-            pass
+            stdout_q = (
+                raw_q.decode("utf-8", errors="replace")
+                if isinstance(raw_q, bytes)
+                else raw_q
+            )
+        except docker.errors.ContainerError as e:
+            raw_err_q = e.stderr
+            stdout_q = (
+                raw_err_q.decode("utf-8", errors="replace")
+                if isinstance(raw_err_q, bytes)
+                else (raw_err_q or "")
+            )
+        except requests.exceptions.ReadTimeout:
+            return []
+        test_ids = _parse_collect_output(stdout_q)
 
     return test_ids
 
@@ -246,28 +276,36 @@ def validate_base_commit_docker(
         if image_name is None:
             image_name = f"commit0.repo.{repo_name.lower().replace('/', '_')}:v0"
 
-    cmd = [
-        "docker",
-        "run",
-        "--rm",
-        image_name,
-        "bash",
-        "-c",
-        f"cd /testbed && source .venv/bin/activate && python -m pytest --collect-only {test_dir} 2>&1 | tail -20",
-    ]
+    client = docker.from_env()
+
+    bash_cmd = (
+        f"cd /testbed && source .venv/bin/activate && "
+        f"python -m pytest --collect-only --override-ini='addopts=' "
+        f"-p no:cacheprovider {test_dir} 2>&1 | tail -20"
+    )
 
     try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
+        raw = client.containers.run(
+            image_name,
+            command=f"bash -c '{bash_cmd}'",
+            remove=True,
+            platform=_get_docker_platform(),
         )
-    except subprocess.TimeoutExpired:
+        stdout = (
+            raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else raw
+        )
+    except docker.errors.ContainerError as e:
+        raw_err = e.stderr
+        stdout = (
+            raw_err.decode("utf-8", errors="replace")
+            if isinstance(raw_err, bytes)
+            else (raw_err or "")
+        )
+    except requests.exceptions.ReadTimeout:
         return 0, "timeout"
 
-    test_ids = _parse_collect_output(result.stdout)
-    stderr_snippet = result.stdout[-500:] if result.stdout else ""
+    test_ids = _parse_collect_output(stdout)
+    stderr_snippet = stdout[-500:] if stdout else ""
     return len(test_ids), stderr_snippet
 
 

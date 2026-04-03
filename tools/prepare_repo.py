@@ -3,7 +3,7 @@ Prepare repos for a commit0 dataset.
 
 For each validated candidate:
 1. Fork to Ethara-Ai GitHub org
-2. Create a 'commit0_{removal_mode}' branch (e.g., commit0_combined)
+2. Create a 'commit0_all' branch
 3. Apply AST stubbing (replace function bodies with pass)
 4. Commit stubbed version as base_commit
 5. Reset to original as reference_commit
@@ -189,6 +189,71 @@ def full_clone(
 # ─── Stub & Commit ───────────────────────────────────────────────────────────
 
 
+def _dir_exists_exact(parent: Path, name: str) -> bool:
+    """Check if a directory exists with exact case (even on case-insensitive macOS)."""
+    if not (parent / name).is_dir():
+        return False
+    try:
+        return name in os.listdir(parent)
+    except OSError:
+        return False
+
+
+def detect_src_dir(repo_dir: Path, full_name: str) -> str:
+    """Auto-detect the source directory within a repo."""
+    package_name = full_name.split("/")[-1].replace("-", "_")
+
+    # 1. Check src/{package_name}/ layout (exact case)
+    src_parent = repo_dir / "src"
+    if _dir_exists_exact(src_parent, package_name):
+        return f"src/{package_name}"
+
+    # 2. Check src/{package_name}/ with lowercase
+    if package_name != package_name.lower() and _dir_exists_exact(
+        src_parent, package_name.lower()
+    ):
+        return f"src/{package_name.lower()}"
+
+    # 3. Flat layout: {package_name}/ at repo root (must contain __init__.py)
+    if (
+        _dir_exists_exact(repo_dir, package_name)
+        and (repo_dir / package_name / "__init__.py").exists()
+    ):
+        return package_name
+
+    if (
+        package_name != package_name.lower()
+        and _dir_exists_exact(repo_dir, package_name.lower())
+        and (repo_dir / package_name.lower() / "__init__.py").exists()
+    ):
+        return package_name.lower()
+
+    # 4. Fallback: scan for directories with __init__.py that aren't test dirs
+    test_names = {"test", "tests", "testing", "test_utils", "conftest"}
+    for child in sorted(repo_dir.iterdir()):
+        if not child.is_dir():
+            continue
+        if child.name.startswith(".") or child.name.startswith("_"):
+            continue
+        if child.name.lower() in test_names:
+            continue
+        if (child / "__init__.py").exists():
+            return child.name
+
+    # 5. Check inside src/ for any package
+    src_dir = repo_dir / "src"
+    if src_dir.is_dir():
+        for child in sorted(src_dir.iterdir()):
+            if not child.is_dir():
+                continue
+            if child.name.startswith(".") or child.name.startswith("_"):
+                continue
+            if (child / "__init__.py").exists():
+                return f"src/{child.name}"
+
+    return ""
+
+
 def create_stubbed_branch(
     repo_dir: Path,
     full_name: str,
@@ -208,7 +273,7 @@ def create_stubbed_branch(
     4. Commit stubbed version as base_commit
     """
     if branch_name is None:
-        branch_name = f"commit0_{removal_mode}"
+        branch_name = "commit0_all"
     default_branch = get_default_branch(repo_dir)
     reference_commit = get_head_sha(repo_dir)
     logger.info("  Reference commit (original): %s", reference_commit[:12])
@@ -316,6 +381,65 @@ def create_stubbed_branch(
 # ─── Setup/Test Dict Generation ──────────────────────────────────────────────
 
 
+def extract_test_dependencies(repo_dir: Path) -> list[str]:
+    """Extract test dependencies from project config files."""
+    base_deps = {"pytest", "pytest-json-report"}
+    found_deps: dict[str, str] = {}
+    for dep in base_deps:
+        found_deps[dep] = dep
+
+    test_group_names = {"test", "testing", "tests", "dev"}
+
+    pyproject = repo_dir / "pyproject.toml"
+    if pyproject.exists():
+        try:
+            import tomllib
+
+            with open(pyproject, "rb") as f:
+                data = tomllib.load(f)
+
+            optional_deps = data.get("project", {}).get("optional-dependencies", {})
+            for group_name in test_group_names:
+                for dep_str in optional_deps.get(group_name, []):
+                    name = re.split(r"[><=!~;\s\[]", dep_str.strip())[0].strip()
+                    if name and name.lower() not in found_deps:
+                        found_deps[name.lower()] = dep_str.strip()
+
+            dep_groups = data.get("dependency-groups", {})
+            for group_name in test_group_names:
+                for dep_entry in dep_groups.get(group_name, []):
+                    if isinstance(dep_entry, str):
+                        name = re.split(r"[><=!~;\s\[]", dep_entry.strip())[0].strip()
+                        if name and name.lower() not in found_deps:
+                            found_deps[name.lower()] = dep_entry.strip()
+        except Exception as e:
+            logger.debug("  Could not parse pyproject.toml for deps: %s", e)
+
+    for req_filename in [
+        "requirements-test.txt",
+        "requirements-tests.txt",
+        "requirements-dev.txt",
+    ]:
+        req_file = repo_dir / req_filename
+        if req_file.exists():
+            try:
+                for line in req_file.read_text(errors="replace").splitlines():
+                    line = line.strip()
+                    if not line or line.startswith("#") or line.startswith("-"):
+                        continue
+                    name = re.split(r"[><=!~;\s\[]", line)[0].strip()
+                    if name and name.lower() not in found_deps:
+                        found_deps[name.lower()] = line
+            except Exception:
+                pass
+
+    for dep in base_deps:
+        if dep not in found_deps:
+            found_deps[dep] = dep
+
+    return sorted(found_deps.values(), key=lambda s: s.lower())
+
+
 def generate_setup_dict(repo_dir: Path, full_name: str) -> dict:
     """
     Generate the 'setup' dict for a RepoInstance.
@@ -361,21 +485,26 @@ def generate_setup_dict(repo_dir: Path, full_name: str) -> dict:
         else:
             setup["install"] = 'pip install -e "."'
 
-        setup["pip_packages"] = ["pytest", "pytest-json-report"]
+        setup["pip_packages"] = extract_test_dependencies(repo_dir)
 
     elif setup_py.exists():
         setup["install"] = 'pip install -e "."'
-        setup["pip_packages"] = ["pytest", "pytest-json-report"]
+        setup["pip_packages"] = extract_test_dependencies(repo_dir)
 
     else:
         # Requirements files
         req_files = []
-        for f in ["requirements.txt", "requirements-dev.txt", "requirements-test.txt"]:
+        for f in [
+            "requirements.txt",
+            "requirements-dev.txt",
+            "requirements-test.txt",
+            "requirements-tests.txt",
+        ]:
             if (repo_dir / f).exists():
                 req_files.append(f)
         if req_files:
             setup["install"] = " && ".join(f"pip install -r {f}" for f in req_files)
-        setup["pip_packages"] = ["pytest", "pytest-json-report"]
+        setup["pip_packages"] = extract_test_dependencies(repo_dir)
 
     # Check for system deps (common patterns)
     pre_install = []
@@ -509,6 +638,35 @@ def create_dataset_entry(
 # ─── Push to Fork ────────────────────────────────────────────────────────────
 
 
+def resolve_commits_from_remote(fork_name: str, branch: str) -> tuple[str, str] | None:
+    try:
+        result = subprocess.run(
+            ["gh", "api", f"repos/{fork_name}/branches/{branch}"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            return None
+        branch_data = json.loads(result.stdout)
+        sha = branch_data["commit"]["sha"]
+
+        result = subprocess.run(
+            ["gh", "api", f"repos/{fork_name}/commits/{sha}"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            return None
+        commit_data = json.loads(result.stdout)
+        parent_sha = commit_data["parents"][0]["sha"]
+
+        return (sha, parent_sha)
+    except Exception:
+        return None
+
+
 def push_to_fork(
     repo_dir: Path,
     fork_name: str,
@@ -518,7 +676,7 @@ def push_to_fork(
 ) -> None:
     """Add fork as remote and push the commit0 branch."""
     if branch is None:
-        branch = f"commit0_{removal_mode}"
+        branch = "commit0_all"
     # Add fork as remote
     if token:
         fork_url = f"https://x-access-token:{token}@github.com/{fork_name}.git"
@@ -599,6 +757,20 @@ def prepare_repos(
             logger.error("  Clone failed: %s", e)
             continue
 
+        src_dir = candidate.get("src_dir_override") or src_dir
+        if not src_dir:
+            src_dir = detect_src_dir(repo_dir, full_name)
+            if src_dir:
+                logger.info("  Auto-detected src_dir: %s", src_dir)
+
+        if not src_dir:
+            logger.error(
+                "  FATAL: src_dir is empty for %s. "
+                "Cannot determine source directory. Use --src-dir to specify manually.",
+                full_name,
+            )
+            continue
+
         # Create stubbed branch
         try:
             base_commit, reference_commit = create_stubbed_branch(
@@ -635,7 +807,7 @@ def prepare_repos(
                 )
                 if spec_path:
                     logger.info("  Spec saved: %s", spec_path)
-                    branch_name = f"commit0_{removal_mode}"
+                    branch_name = "commit0_all"
                     git(repo_dir, "checkout", branch_name)
                     dest = repo_dir / Path(spec_path).name
                     shutil.copy2(spec_path, dest)
@@ -650,13 +822,24 @@ def prepare_repos(
 
         # Push to fork
         if not dry_run:
+            branch_name = "commit0_all"
             try:
-                branch_name = f"commit0_{removal_mode}"
                 git(repo_dir, "checkout", branch_name)
                 push_to_fork(repo_dir, fork_name, branch=branch_name, token=token)
             except Exception as e:
                 logger.error("  Push failed: %s", e)
-                # Continue anyway — entry is still useful for local work
+                remote_commits = resolve_commits_from_remote(fork_name, branch_name)
+                if remote_commits:
+                    base_commit, reference_commit = remote_commits
+                    logger.info(
+                        "  Resolved commits from remote: base=%s, ref=%s",
+                        base_commit[:12],
+                        reference_commit[:12],
+                    )
+                else:
+                    logger.warning(
+                        "  No remote branch found — using local commits only"
+                    )
 
         # Create dataset entry
         entry = create_dataset_entry(
@@ -767,6 +950,12 @@ def main() -> None:
         default=None,
         help="Pin to a specific git commit SHA",
     )
+    parser.add_argument(
+        "--src-dir",
+        type=str,
+        default=None,
+        help="Source directory within repo (e.g., 'src/flask'). Auto-detected if omitted.",
+    )
 
     args = parser.parse_args()
 
@@ -782,6 +971,7 @@ def main() -> None:
                 "status": "pass",
                 "analysis": None,
                 "release_tag": args.tag or args.commit,
+                "src_dir_override": args.src_dir,
             }
         ]
     elif args.validated_file:

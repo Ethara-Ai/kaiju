@@ -339,6 +339,7 @@ def check_has_pytest(
         "requirements.txt",
         "requirements-dev.txt",
         "requirements-test.txt",
+        "requirements-tests.txt",
         "tox.ini",
     ]
 

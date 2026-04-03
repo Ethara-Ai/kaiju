@@ -31,6 +31,40 @@ def _native_platform() -> str:
     return "linux/amd64"
 
 
+def _safe_builder_args() -> list[str]:
+    """Return ``['--builder', name]`` for a builder that supports ``--load``.
+
+    ``docker-container`` builders cannot ``--load`` into the daemon.  If the
+    current default builder uses that driver, fall back to the well-known
+    ``default`` or ``desktop-linux`` builders which always use the ``docker``
+    driver.  When no such builder exists, return an empty list so buildx
+    uses whatever is currently active (best-effort).
+    """
+    try:
+        result = subprocess.run(
+            ["docker", "buildx", "inspect"],
+            capture_output=True,
+            text=True,
+        )
+        output = result.stdout + result.stderr
+        if "docker-container" in output:
+            # Current builder uses docker-container driver — can't --load.
+            # Try builders that use the docker driver.
+            for candidate in ("desktop-linux", "default"):
+                probe = subprocess.run(
+                    ["docker", "buildx", "inspect", candidate],
+                    capture_output=True,
+                    text=True,
+                )
+                probe_out = probe.stdout + probe.stderr
+                if probe.returncode == 0 and "docker-container" not in probe_out:
+                    return ["--builder", candidate]
+            return []  # best-effort: let buildx figure it out
+    except Exception:
+        pass
+    return []  # current builder is fine
+
+
 PROXY_ENV_KEYS = [
     "http_proxy",
     "https_proxy",
@@ -172,6 +206,7 @@ def build_image(
             buildarg_flags.extend(["--build-arg", f"{k}={v}"])
 
         nocache_flags = ["--no-cache"] if nocache else []
+        builder_flags = _safe_builder_args()
 
         # Step 1: Build multi-arch OCI tarball for ECR push (non-fatal)
         oci_dir = OCI_IMAGE_DIR / image_name.replace(":", "__")
@@ -182,6 +217,7 @@ def build_image(
             "docker",
             "buildx",
             "build",
+            *builder_flags,
             "--platform",
             platform,
             "--tag",
@@ -210,8 +246,7 @@ def build_image(
             "docker",
             "buildx",
             "build",
-            "--builder",
-            "default",
+            *builder_flags,
             "--platform",
             native,
             "--tag",

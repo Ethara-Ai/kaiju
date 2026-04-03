@@ -369,7 +369,7 @@ preflight_model_api() {
     probe_output=$(mktemp)
 
     set +e
-    timeout 60 "$VENV_PYTHON" - "$MODEL_NAME" "$CACHE_PROMPTS" <<'PYEOF' >"$probe_output" 2>&1
+    timeout ${PROBE_TIMEOUT:-120} "$VENV_PYTHON" - "$MODEL_NAME" "$CACHE_PROMPTS" <<'PYEOF' >"$probe_output" 2>&1
 import sys, os
 
 model_name = sys.argv[1]
@@ -396,6 +396,7 @@ try:
         model=m.name,
         messages=messages,
         max_tokens=8,
+        timeout=60,
     )
     content = resp.choices[0].message.content.strip()
     print(f"PROBE_OK: model responded: {content!r}")
@@ -463,8 +464,8 @@ ts() { date "+%Y-%m-%d %H:%M:%S"; }
 log() { echo "[$(ts)] [${RUN_ID}] $1"; }
 
 get_mtime() {
-    stat -f '%m' "$1" 2>/dev/null \
-        || stat -c '%Y' "$1" 2>/dev/null \
+    stat -c '%Y' "$1" 2>/dev/null \
+        || stat -f '%m' "$1" 2>/dev/null \
         || "$VENV_PYTHON" -c "import os; print(int(os.path.getmtime('$1')))" 2>/dev/null \
         || echo "0"
 }

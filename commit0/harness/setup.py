@@ -51,9 +51,9 @@ def main(
             # For HF datasets like "wentingzhao/commit0_combined", the last
             # segment is the branch name on the fork.  For local JSON files
             # (paths ending in .json or containing os.sep), fall back to
-            # "commit0_combined" which is the standard branch name.
+            # "commit0_all" which is the standard branch name.
             if dataset_name.endswith(".json") or os.sep in dataset_name:
-                branch = "commit0_combined"
+                branch = "commit0_all"
             else:
                 branch = dataset_name.split("/")[-1]
         repo = clone_repo(clone_url, clone_dir, branch, logger)
@@ -61,6 +61,29 @@ def main(
             repo.git.branch("-d", BASE_BRANCH)
         repo.git.checkout("-b", BASE_BRANCH)
         logger.info(f"Checked out the base branch: {BASE_BRANCH}")
+
+        try:
+            gitignore_path = os.path.join(clone_dir, ".gitignore")
+            existing_lines: list[str] = []
+            if os.path.exists(gitignore_path):
+                with open(gitignore_path, "r") as f:
+                    existing_lines = f.read().splitlines()
+            added_lines: list[str] = []
+            for entry in [".aider*", "logs/"]:
+                if entry not in existing_lines:
+                    added_lines.append(entry)
+            if added_lines:
+                with open(gitignore_path, "a") as f:
+                    for line in added_lines:
+                        f.write(f"\n{line}")
+                    f.write("\n")
+                repo.git.add(".gitignore")
+                repo.git.commit("-m", "chore: add aider/logs to gitignore")
+                logger.info(f"Added {added_lines} to .gitignore")
+            else:
+                logger.info(".gitignore already has aider/logs exclusions")
+        except Exception as e:
+            logger.warning(f"Failed to update .gitignore: {e}")
 
 
 __all__ = []
