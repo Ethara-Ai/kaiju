@@ -809,9 +809,9 @@ def prepare_repos(
                     logger.info("  Spec saved: %s", spec_path)
                     branch_name = "commit0_all"
                     git(repo_dir, "checkout", branch_name)
-                    dest = repo_dir / Path(spec_path).name
+                    dest = repo_dir / "spec.pdf.bz2"
                     shutil.copy2(spec_path, dest)
-                    git(repo_dir, "add", dest.name)
+                    git(repo_dir, "add", "spec.pdf.bz2")
                     git(repo_dir, "commit", "-m", f"Add spec PDF for {repo_name}")
                     base_commit = get_head_sha(repo_dir)
                     logger.info("  Updated base_commit with spec: %s", base_commit[:12])

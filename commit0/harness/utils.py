@@ -186,7 +186,15 @@ def generate_patch_between_commits(
     """
     try:
         patch = repo.git.diff(
-            old_commit, new_commit, "--", ".", ":(exclude)spec.pdf.bz2"
+            old_commit,
+            new_commit,
+            "--",
+            ".",
+            ":(exclude)spec.pdf.bz2",
+            ":(exclude)spec.pdf",
+            ":(exclude).aider*",
+            ":(exclude)*.pdf",
+            ":(exclude)*.pdf.bz2",
         )
         return patch + "\n\n"
     except git.GitCommandError as e:

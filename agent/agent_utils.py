@@ -404,15 +404,22 @@ def get_message(
         repo_info = ""
 
     if agent_config.use_spec_info:
-        with bz2.open("spec.pdf.bz2", "rb") as in_file:
-            with open("spec.pdf", "wb") as out_file:
-                out_file.write(in_file.read())
-        spec_info = (
-            f"\n{SPEC_INFO_HEADER} "
-            + get_specification(specification_pdf_path=Path(repo_path, "spec.pdf"))[
-                : agent_config.max_spec_info_length
-            ]
-        )
+        spec_pdf_path = Path(repo_path) / "spec.pdf"
+        spec_bz2_path = Path(repo_path) / "spec.pdf.bz2"
+        # Decompress spec.pdf.bz2 → spec.pdf if needed
+        if spec_bz2_path.exists() and not spec_pdf_path.exists():
+            with bz2.open(str(spec_bz2_path), "rb") as in_file:
+                with open(str(spec_pdf_path), "wb") as out_file:
+                    out_file.write(in_file.read())
+        if spec_pdf_path.exists():
+            spec_info = (
+                f"\n{SPEC_INFO_HEADER} "
+                + get_specification(specification_pdf_path=spec_pdf_path)[
+                    : agent_config.max_spec_info_length
+                ]
+            )
+        else:
+            spec_info = ""
     else:
         spec_info = ""
 

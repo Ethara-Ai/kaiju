@@ -43,6 +43,7 @@ REPO_SPLIT_OVERRIDE=""
 STAGE_TIMEOUT=7200
 EVAL_TIMEOUT=3600
 NO_STAGE3_LINT="false"
+USE_SPEC_INFO="true"
 INACTIVITY_TIMEOUT=900
 SKIP_TO_STAGE=""
 
@@ -75,6 +76,7 @@ Options:
   --eval-timeout   <secs>    Eval timeout in seconds (default: 3600)
   --backend        <name>    Backend: local or modal (default: local)
   --no-stage3-lint           Disable lint in Stage 3 (for ablation experiments)
+  --no-spec-info             Disable spec doc provisioning and agent spec context
   --skip-to-stage  <1|2|3>   Skip to stage N (reuse prior stages from existing branch)
   -h, --help                 Show this help
 USAGE
@@ -92,6 +94,7 @@ while [[ $# -gt 0 ]]; do
         --eval-timeout)  [[ $# -lt 2 ]] && { echo "Error: --eval-timeout requires a value"; exit 1; }; EVAL_TIMEOUT="$2";      shift 2 ;;
         --backend)     [[ $# -lt 2 ]] && { echo "Error: --backend requires a value"; exit 1; }; BACKEND="$2";             shift 2 ;;
         --no-stage3-lint) NO_STAGE3_LINT="true"; shift ;;
+        --no-spec-info) USE_SPEC_INFO="false"; shift ;;
         --inactivity-timeout) [[ $# -lt 2 ]] && { echo "Error: --inactivity-timeout requires a value"; exit 1; }; INACTIVITY_TIMEOUT="$2"; shift 2 ;;
         --skip-to-stage) [[ $# -lt 2 ]] && { echo "Error: --skip-to-stage requires a value"; exit 1; }; SKIP_TO_STAGE="$2"; shift 2 ;;
         -h|--help)     print_usage ;;
@@ -517,6 +520,7 @@ write_agent_config() {
     local run_entire_dir_lint="$3"
     local use_unit_tests_info="$4"
     local add_import_module_to_context="$5"
+    local use_spec_info="${6:-$USE_SPEC_INFO}"
 
     cat > "$AGENT_CONFIG" <<'YAMLEOF'
 agent_name: aider
@@ -542,7 +546,7 @@ use_repo_info: false
 max_repo_info_length: 10000
 use_unit_tests_info: ${use_unit_tests_info}
 max_unit_tests_info_length: 10000
-use_spec_info: false
+use_spec_info: ${use_spec_info}
 max_spec_info_length: 10000
 use_lint_info: ${use_lint_info}
 max_lint_info_length: 10000
@@ -891,7 +895,7 @@ stage_1_draft() {
     log "STAGE 1: Draft Initial Implementations"
     log "======================================================================"
 
-    write_agent_config "false" "false" "false" "true" "true"
+    write_agent_config "false" "false" "false" "true" "true" "$USE_SPEC_INFO"
 
     local stage_log_dir="${LOG_BASE}/stage1_draft"
     mkdir -p "$stage_log_dir"
@@ -939,7 +943,7 @@ stage_2_lint_refine() {
     log "STAGE 2: Refine with Static Analysis (Lint)"
     log "======================================================================"
 
-    write_agent_config "false" "true" "true" "false" "false"
+    write_agent_config "false" "true" "true" "false" "false" "$USE_SPEC_INFO"
 
     local stage_log_dir="${LOG_BASE}/stage2_lint"
     mkdir -p "$stage_log_dir"
@@ -1000,7 +1004,7 @@ stage_3_test_refine() {
         log "  Stage 3 lint DISABLED (--no-stage3-lint)"
     fi
 
-    write_agent_config "true" "$s3_lint" "false" "false" "false"
+    write_agent_config "true" "$s3_lint" "false" "false" "false" "$USE_SPEC_INFO"
 
     local stage_log_dir="${LOG_BASE}/stage3_tests"
     mkdir -p "$stage_log_dir"
@@ -1130,6 +1134,86 @@ trap cleanup EXIT
 trap 'exit' INT TERM
 
 # ============================================================
+# Spec Doc Provisioning
+# ============================================================
+
+ensure_spec_docs() {
+    if [[ "$USE_SPEC_INFO" != "true" ]]; then
+        log "  Spec docs: DISABLED (--no-spec-info)"
+        return 0
+    fi
+
+    log "Ensuring spec docs are available for all repos..."
+
+    local ds_path
+    ds_path="$(cd "$(dirname "$DATASET_FILE")" && pwd)/$(basename "$DATASET_FILE")"
+
+    "$VENV_PYTHON" -c "
+import json, os, shutil, sys
+from pathlib import Path
+
+ds = json.loads(Path('${ds_path}').read_text())
+if isinstance(ds, dict) and 'data' in ds:
+    ds = ds['data']
+
+repo_base = '${REPO_BASE}'
+specs_dir = '${BASE_DIR}/specs'
+os.makedirs(specs_dir, exist_ok=True)
+
+for entry in ds:
+    repo_name = entry.get('repo', '').split('/')[-1]
+    if not repo_name:
+        continue
+
+    repo_dir = os.path.join(repo_base, repo_name)
+    if not os.path.isdir(repo_dir):
+        continue
+
+    bz2_path = os.path.join(repo_dir, 'spec.pdf.bz2')
+    pdf_path = os.path.join(repo_dir, 'spec.pdf')
+
+    if os.path.exists(bz2_path) or os.path.exists(pdf_path):
+        print(f'  OK   {repo_name}: spec already present')
+        continue
+
+    spec_url = ''
+    setup = entry.get('setup', {})
+    if isinstance(setup, dict):
+        spec_url = setup.get('specification', '')
+    if not spec_url:
+        spec_url = entry.get('specification', '')
+
+    if not spec_url:
+        print(f'  SKIP {repo_name}: no specification URL')
+        continue
+
+    cached_bz2 = os.path.join(specs_dir, f'{repo_name}.pdf.bz2')
+    cached_pdf = os.path.join(specs_dir, f'{repo_name}.pdf')
+
+    if os.path.exists(cached_bz2):
+        shutil.copy2(cached_bz2, bz2_path)
+        print(f'  OK   {repo_name}: copied from cache')
+        continue
+    if os.path.exists(cached_pdf):
+        shutil.copy2(cached_pdf, pdf_path)
+        print(f'  OK   {repo_name}: copied from cache (pdf)')
+        continue
+
+    print(f'  SCRAPE {repo_name}: {spec_url}')
+    try:
+        from tools.scrape_pdf import scrape_spec
+        result = scrape_spec(base_url=spec_url, name=repo_name, output_dir=specs_dir, compress=True)
+        if result and os.path.exists(result):
+            shutil.copy2(result, bz2_path)
+            print(f'  OK   {repo_name}: scraped and installed')
+        else:
+            print(f'  WARN {repo_name}: scrape returned no output')
+    except Exception as e:
+        print(f'  WARN {repo_name}: scrape failed: {e}')
+" 2>&1 | while IFS= read -r line; do log "$line"; done
+}
+
+# ============================================================
 # Main
 # ============================================================
 
@@ -1145,6 +1229,7 @@ main() {
     log "Max Iter:     ${MAX_ITERATION}"
     log "Stage Timeout: ${STAGE_TIMEOUT}s (0=disabled) | Eval Timeout: ${EVAL_TIMEOUT}s"
     log "Inactivity:   ${INACTIVITY_TIMEOUT}s (watchdog kills stuck agents)"
+    log "Spec Info:    ${USE_SPEC_INFO}"
     if [[ "$NO_STAGE3_LINT" == "true" ]]; then
         log "Stage3 Lint:  DISABLED (--no-stage3-lint)"
     else
@@ -1161,6 +1246,8 @@ main() {
     preflight
 
     write_commit0_config
+
+    ensure_spec_docs
 
     if [[ -n "$SKIP_TO_STAGE" ]]; then
         if [[ ! -f "$PIPELINE_LOG" ]]; then
