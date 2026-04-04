@@ -138,6 +138,7 @@ def prepare_single_repo(
     removal_mode: str,
     dry_run: bool = False,
     tag: str | None = None,
+    fallback: bool = True,
 ) -> dict | None:
     """Run the full preparation pipeline for a single repo.
 
@@ -154,6 +155,7 @@ def prepare_single_repo(
         get_head_sha,
         git,
         push_to_fork,
+        quick_import_check,
     )
 
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
@@ -201,6 +203,44 @@ def prepare_single_repo(
     except Exception as e:
         logger.error("  Stubbing failed: %s", e)
         return None
+
+    # 4a. Quick import check with adaptive fallback cascade
+    if fallback and src_dir:
+        ok, err = quick_import_check(repo_dir, src_dir)
+        if not ok:
+            logger.warning("  Import check failed (mode=%s): %s", removal_mode, err)
+            FALLBACK_MODES = ["all", "docstring", "combined"]
+            remaining = [m for m in FALLBACK_MODES if m != removal_mode]
+
+            for fallback_mode in remaining:
+                logger.info("  Fallback: re-stubbing with mode=%s", fallback_mode)
+                try:
+                    default_branch = get_default_branch(repo_dir)
+                    git(repo_dir, "checkout", default_branch, check=False)
+                    base_commit, reference_commit = create_stubbed_branch(
+                        repo_dir,
+                        full_name,
+                        src_dir,
+                        removal_mode=fallback_mode,
+                    )
+                    ok2, err2 = quick_import_check(repo_dir, src_dir)
+                    if ok2:
+                        logger.info("  Fallback mode=%s succeeded!", fallback_mode)
+                        removal_mode = fallback_mode
+                        break
+                    else:
+                        logger.warning(
+                            "  Fallback mode=%s also failed: %s", fallback_mode, err2
+                        )
+                except Exception as e:
+                    logger.warning("  Fallback mode=%s error: %s", fallback_mode, e)
+            else:
+                logger.error(
+                    "  All fallback modes failed for %s — proceeding with original",
+                    full_name,
+                )
+        else:
+            logger.info("  Import check passed (mode=%s)", removal_mode)
 
     # 5. Remove GitHub Actions workflows (avoids PAT workflow scope error)
     branch_name = f"commit0_{removal_mode}"
@@ -440,6 +480,11 @@ Examples:
         default=None,
         help="State file path (default: <output_stem>_state.json)",
     )
+    parser.add_argument(
+        "--no-fallback",
+        action="store_true",
+        help="Disable adaptive fallback: don't retry with different removal modes on import failure",
+    )
 
     args = parser.parse_args()
 
@@ -496,6 +541,7 @@ Examples:
             org=args.org,
             removal_mode=args.removal_mode,
             dry_run=args.dry_run,
+            fallback=not args.no_fallback,
         )
 
         if entry is None:

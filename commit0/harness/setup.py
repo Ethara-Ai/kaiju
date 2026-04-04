@@ -58,7 +58,7 @@ def main(
                 branch = dataset_name.split("/")[-1]
         repo = clone_repo(clone_url, clone_dir, branch, logger)
         if BASE_BRANCH in repo.branches:
-            repo.git.branch("-d", BASE_BRANCH)
+            repo.git.branch("-D", BASE_BRANCH)
         repo.git.checkout("-b", BASE_BRANCH)
         logger.info(f"Checked out the base branch: {BASE_BRANCH}")
 

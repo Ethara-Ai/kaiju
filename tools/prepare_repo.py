@@ -299,7 +299,36 @@ def create_stubbed_branch(
         stub_target.relative_to(repo_dir),
         removal_mode,
     )
-    import_time_names = collect_import_time_names(stub_target)
+
+    extra_scan_dirs: list[Path] = []
+    test_dir_names = {"test", "tests", "testing"}
+    for child in sorted(repo_dir.iterdir()):
+        if not child.is_dir() or child.name.startswith("."):
+            continue
+        if child == stub_target:
+            continue
+        if child.name.lower() in test_dir_names:
+            extra_scan_dirs.append(child)
+            continue
+        if (child / "__init__.py").exists():
+            extra_scan_dirs.append(child)
+    src_parent = repo_dir / "src"
+    if src_parent.is_dir() and stub_target.parent == src_parent:
+        for child in sorted(src_parent.iterdir()):
+            if not child.is_dir() or child == stub_target:
+                continue
+            if (child / "__init__.py").exists():
+                extra_scan_dirs.append(child)
+    if extra_scan_dirs:
+        logger.info(
+            "  Scanning %d extra dirs: %s",
+            len(extra_scan_dirs),
+            [d.name for d in extra_scan_dirs],
+        )
+
+    import_time_names = collect_import_time_names(
+        stub_target, extra_scan_dirs=extra_scan_dirs
+    )
     if import_time_names:
         logger.info(
             "  Preserving %d import-time functions: %s",
@@ -376,6 +405,40 @@ def create_stubbed_branch(
     logger.info("  Base commit (stubbed): %s", base_commit[:12])
 
     return base_commit, reference_commit
+
+
+def quick_import_check(repo_dir: Path, src_dir: str) -> tuple[bool, str]:
+    """Check if stubbed code can be imported without errors.
+
+    Returns (success, error_message).
+    """
+    # Derive package name from src_dir
+    # src_dir could be "src/package_name" or "package_name"
+    parts = src_dir.split("/")
+    package_name = parts[-1]
+
+    # Some packages use hyphens in dir names but underscores in imports
+    import_name = package_name.replace("-", "_")
+
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", f"import {import_name}"],
+            cwd=str(repo_dir),
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+        )
+        if result.returncode == 0:
+            return True, ""
+        error = (
+            result.stderr.strip().split("\n")[-1] if result.stderr else "unknown error"
+        )
+        return False, error
+    except subprocess.TimeoutExpired:
+        return False, "import timed out after 30s"
+    except Exception as e:
+        return False, str(e)
 
 
 # ─── Setup/Test Dict Generation ──────────────────────────────────────────────
