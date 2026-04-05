@@ -13,6 +13,7 @@
 #     bash run_pipeline.sh --model minimax --dataset minitorch
 #     bash run_pipeline.sh --model gpt54 --dataset minitorch --branch my-branch
 #     bash run_pipeline.sh --model "bedrock/some-arn" --dataset ./custom_dataset.json --repo-split myrepo
+#     bash run_pipeline.sh --model opus --dataset minitorch --num-samples 3
 #     nohup bash run_pipeline.sh --model kimi --dataset minitorch > logs/kimi_minitorch.log 2>&1 &
 #
 # Requirements: jq, bc
@@ -40,12 +41,14 @@ MODEL_ARG=""
 DATASET_ARG=""
 BRANCH_OVERRIDE=""
 REPO_SPLIT_OVERRIDE=""
-STAGE_TIMEOUT=7200
+STAGE_TIMEOUT=0
 EVAL_TIMEOUT=3600
 NO_STAGE3_LINT="false"
 USE_SPEC_INFO="true"
 INACTIVITY_TIMEOUT=900
+MAX_WALL_TIME=86400
 SKIP_TO_STAGE=""
+NUM_SAMPLES=1
 
 print_usage() {
     cat <<'USAGE'
@@ -71,12 +74,14 @@ Options:
   --branch         <name>    Override auto-generated branch name
   --repo-split     <name>    Override repo_split (required for custom dataset paths)
   --max-iteration  <n>       Max agent iterations per stage (default: 3)
-  --stage-timeout  <secs>    Hard stage timeout in seconds (default: 7200, 0=disable)
+  --stage-timeout  <secs>    Hard stage timeout in seconds (default: 0=disabled, skipped if agent active)
   --inactivity-timeout <s>   Kill agent if no log activity for N seconds (default: 900)
+  --max-wall-time  <secs>    Absolute per-stage wall-time cap in seconds (default: 86400, 0=disable)
   --eval-timeout   <secs>    Eval timeout in seconds (default: 3600)
   --backend        <name>    Backend: local or modal (default: local)
   --no-stage3-lint           Disable lint in Stage 3 (for ablation experiments)
   --no-spec-info             Disable spec doc provisioning and agent spec context
+  --num-samples    <n>       Number of independent samples to run, pass@k (default: 1)
   --skip-to-stage  <1|2|3>   Skip to stage N (reuse prior stages from existing branch)
   -h, --help                 Show this help
 USAGE
@@ -96,6 +101,8 @@ while [[ $# -gt 0 ]]; do
         --no-stage3-lint) NO_STAGE3_LINT="true"; shift ;;
         --no-spec-info) USE_SPEC_INFO="false"; shift ;;
         --inactivity-timeout) [[ $# -lt 2 ]] && { echo "Error: --inactivity-timeout requires a value"; exit 1; }; INACTIVITY_TIMEOUT="$2"; shift 2 ;;
+        --max-wall-time) [[ $# -lt 2 ]] && { echo "Error: --max-wall-time requires a value"; exit 1; }; MAX_WALL_TIME="$2"; shift 2 ;;
+        --num-samples) [[ $# -lt 2 ]] && { echo "Error: --num-samples requires a value"; exit 1; }; NUM_SAMPLES="$2"; shift 2 ;;
         --skip-to-stage) [[ $# -lt 2 ]] && { echo "Error: --skip-to-stage requires a value"; exit 1; }; SKIP_TO_STAGE="$2"; shift 2 ;;
         -h|--help)     print_usage ;;
         *)
@@ -116,6 +123,19 @@ if [[ -z "$DATASET_ARG" ]]; then
     echo "Error: --dataset is required"
     echo ""
     print_usage
+fi
+
+if ! [[ "$NUM_SAMPLES" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: --num-samples must be a positive integer (got: $NUM_SAMPLES)"
+    exit 1
+fi
+
+if [[ "$NUM_SAMPLES" -gt 1 ]] && [[ -n "$SKIP_TO_STAGE" ]]; then
+    echo "Error: --skip-to-stage and --num-samples > 1 cannot be used together."
+    echo "  Each sample writes its own results file, so --skip-to-stage"
+    echo "  cannot determine which sample's prior results to resume from."
+    echo "  Run each sample individually with --skip-to-stage instead."
+    exit 1
 fi
 
 # ============================================================
@@ -266,23 +286,37 @@ DATASET_SHORT=""
 DATASET_SPLIT="train"
 resolve_dataset "$DATASET_ARG"
 
-# Build the branch name: aider-<model_short>-<dataset_short>
-BRANCH_NAME="${BRANCH_OVERRIDE:-aider-${MODEL_SHORT}-${DATASET_SHORT}}"
+# Build the base branch name: aider-<model_short>-<dataset_short>
+BASE_BRANCH_NAME="${BRANCH_OVERRIDE:-aider-${MODEL_SHORT}-${DATASET_SHORT}}"
 if [[ -z "$BRANCH_OVERRIDE" ]] && [[ "$NO_STAGE3_LINT" == "true" ]]; then
-    BRANCH_NAME="${BRANCH_NAME}-nolint-s3"
+    BASE_BRANCH_NAME="${BASE_BRANCH_NAME}-nolint-s3"
 fi
 
-# Paths that incorporate model+dataset for isolation
-RUN_ID=$(echo "${MODEL_SHORT}_${DATASET_SHORT}" | tr -dc 'a-zA-Z0-9._-')
+# Base RUN_ID (without sample suffix)
+BASE_RUN_ID=$(echo "${MODEL_SHORT}_${DATASET_SHORT}" | tr -dc 'a-zA-Z0-9._-')
 if [[ "$NO_STAGE3_LINT" == "true" ]]; then
-    RUN_ID="${RUN_ID}_nolint-s3"
+    BASE_RUN_ID="${BASE_RUN_ID}_nolint-s3"
 fi
-LOG_BASE="${BASE_DIR}/logs/agent/${RUN_ID}"
-PIPELINE_LOG="${BASE_DIR}/logs/pipeline_${RUN_ID}_results.json"
 
-# Config files — per-run to allow parallel execution
-COMMIT0_CONFIG="${BASE_DIR}/.commit0_${RUN_ID}.yaml"
-AGENT_CONFIG="${BASE_DIR}/.agent_${RUN_ID}.yaml"
+# Set per-sample variables. When NUM_SAMPLES=1 no suffix is added.
+# Called at the top of each sample iteration.
+set_sample_vars() {
+    local sample_idx="$1"
+    if [[ "$NUM_SAMPLES" -eq 1 ]]; then
+        BRANCH_NAME="${BASE_BRANCH_NAME}"
+        RUN_ID="${BASE_RUN_ID}"
+    else
+        BRANCH_NAME="${BASE_BRANCH_NAME}-run_${sample_idx}"
+        RUN_ID="${BASE_RUN_ID}_run_${sample_idx}"
+    fi
+    LOG_BASE="${BASE_DIR}/logs/agent/${RUN_ID}"
+    PIPELINE_LOG="${BASE_DIR}/logs/pipeline_${RUN_ID}_results.json"
+    COMMIT0_CONFIG="${BASE_DIR}/.commit0_${RUN_ID}.yaml"
+    AGENT_CONFIG="${BASE_DIR}/.agent_${RUN_ID}.yaml"
+}
+
+# Initialize with sample 1 defaults (used by preflight, etc.)
+set_sample_vars 1
 
 # ============================================================
 # Preflight Checks
@@ -469,7 +503,7 @@ log() { echo "[$(ts)] [${RUN_ID}] $1"; }
 get_mtime() {
     stat -c '%Y' "$1" 2>/dev/null \
         || stat -f '%m' "$1" 2>/dev/null \
-        || "$VENV_PYTHON" -c "import os; print(int(os.path.getmtime('$1')))" 2>/dev/null \
+        || "$VENV_PYTHON" -c "import os,sys; print(int(os.path.getmtime(sys.argv[1])))" "$1" 2>/dev/null \
         || echo "0"
 }
 
@@ -486,6 +520,106 @@ get_newest_aider_log() {
         fi
     done < <(find "$search_dir" -name "aider.log" 2>/dev/null)
     echo "$newest"
+}
+
+# ============================================================
+# Spec Doc Provisioning
+# ============================================================
+
+ensure_spec_docs() {
+    if [[ "$USE_SPEC_INFO" != "true" ]]; then
+        log "  Spec docs disabled — skipping."
+        return 0
+    fi
+
+    log "Ensuring spec docs are available for all repos..."
+
+    "$VENV_PYTHON" - "$DATASET_FILE" "$REPO_BASE" "$BASE_DIR" <<'PYEOF'
+import json, os, sys, shutil, subprocess, bz2
+from pathlib import Path
+
+dataset_file = sys.argv[1]
+repo_base    = sys.argv[2]
+base_dir     = sys.argv[3]
+
+# Load dataset
+if dataset_file.endswith(".json") or os.path.isfile(dataset_file):
+    with open(dataset_file) as f:
+        data = json.load(f)
+    if isinstance(data, dict) and "data" in data:
+        entries = data["data"]
+    elif isinstance(data, list):
+        entries = data
+    else:
+        entries = []
+else:
+    entries = []
+
+if not entries:
+    print("  No dataset entries found — skipping spec provisioning.")
+    sys.exit(0)
+
+specs_dir = os.path.join(base_dir, "specs")
+os.makedirs(specs_dir, exist_ok=True)
+
+for entry in entries:
+    repo = entry.get("repo", "")
+    repo_name = repo.split("/")[-1]
+    repo_dir = os.path.join(repo_base, repo_name)
+
+    if not os.path.isdir(repo_dir):
+        print(f"  SKIP {repo_name}: repo dir not found at {repo_dir}")
+        continue
+
+    bz2_in_repo = os.path.join(repo_dir, "spec.pdf.bz2")
+    pdf_in_repo = os.path.join(repo_dir, "spec.pdf")
+
+    if os.path.exists(bz2_in_repo) or os.path.exists(pdf_in_repo):
+        print(f"  OK   {repo_name}: spec already present")
+        continue
+
+    spec_url = None
+    setup = entry.get("setup", {})
+    if isinstance(setup, dict):
+        spec_url = setup.get("specification")
+    if not spec_url:
+        print(f"  SKIP {repo_name}: no specification URL in dataset entry")
+        continue
+
+    cached_bz2 = os.path.join(specs_dir, f"{repo_name}.pdf.bz2")
+    cached_pdf = os.path.join(specs_dir, f"{repo_name}.pdf")
+
+    if os.path.exists(cached_bz2):
+        shutil.copy2(cached_bz2, bz2_in_repo)
+        print(f"  OK   {repo_name}: copied cached spec from {cached_bz2}")
+        continue
+    if os.path.exists(cached_pdf):
+        shutil.copy2(cached_pdf, pdf_in_repo)
+        print(f"  OK   {repo_name}: copied cached spec from {cached_pdf}")
+        continue
+
+    print(f"  SCRAPE {repo_name}: {spec_url}")
+    try:
+        from tools.scrape_pdf import scrape_spec
+        result = scrape_spec(
+            base_url=spec_url,
+            name=repo_name,
+            output_dir=specs_dir,
+            compress=True,
+        )
+        if result and os.path.exists(result):
+            shutil.copy2(result, bz2_in_repo)
+            print(f"  OK   {repo_name}: scraped and placed spec.pdf.bz2")
+        else:
+            print(f"  WARN {repo_name}: scrape returned no output")
+    except Exception as e:
+        print(f"  WARN {repo_name}: scrape failed: {e}")
+
+PYEOF
+    local rc=$?
+    if [[ $rc -ne 0 ]]; then
+        log "  WARNING: Spec doc provisioning had errors (rc=$rc) — continuing anyway."
+    fi
 }
 
 # ============================================================
@@ -520,7 +654,7 @@ write_agent_config() {
     local run_entire_dir_lint="$3"
     local use_unit_tests_info="$4"
     local add_import_module_to_context="$5"
-    local use_spec_info="${6:-$USE_SPEC_INFO}"
+    local use_spec_info="${6:-false}"
 
     cat > "$AGENT_CONFIG" <<'YAMLEOF'
 agent_name: aider
@@ -579,18 +713,65 @@ watchdog_run() {
     local log_dir="$2"
     local inactivity_limit="$3"
     local hard_timeout="$4"
+    local absolute_max="${5:-86400}"
     local start_time
     start_time=$(date +%s)
+
+    local hard_timeout_warned="false"
+    local mtime_functional="true"
+
+    # Validate get_mtime works before relying on it
+    local _probe_mtime
+    _probe_mtime=$(get_mtime "/proc/self/status")
+    if [[ "$_probe_mtime" -eq 0 ]] 2>/dev/null; then
+        log "  WATCHDOG: WARNING — get_mtime returned 0 for /proc/self/status. File-activity detection may be non-functional."
+        mtime_functional="false"
+    fi
 
     while kill -0 "$agent_pid" 2>/dev/null; do
         sleep 15
 
-        if [[ "$hard_timeout" -gt 0 ]]; then
-            local now
-            now=$(date +%s)
-            local elapsed=$(( now - start_time ))
-            if [[ $elapsed -ge $hard_timeout ]]; then
-                log "  WATCHDOG: Hard timeout ${hard_timeout}s reached. Killing agent."
+        local now_epoch
+        now_epoch=$(date +%s)
+
+        local latest_mtime=0
+
+        local latest_log
+        latest_log=$(get_newest_aider_log "$log_dir")
+        if [[ -n "$latest_log" ]] && [[ -f "$latest_log" ]]; then
+            local aider_mtime
+            aider_mtime=$(get_mtime "$latest_log")
+            if [[ "$aider_mtime" -gt "$latest_mtime" ]]; then
+                latest_mtime="$aider_mtime"
+            fi
+        fi
+
+        local agent_run_log="${log_dir}/agent_run.log"
+        if [[ -f "$agent_run_log" ]]; then
+            local run_log_mtime
+            run_log_mtime=$(get_mtime "$agent_run_log")
+            if [[ "$run_log_mtime" -gt "$latest_mtime" ]]; then
+                latest_mtime="$run_log_mtime"
+            fi
+        fi
+
+        local idle=0
+        local agent_active="false"
+        if [[ "$latest_mtime" -gt 0 ]]; then
+            idle=$(( now_epoch - latest_mtime ))
+            if [[ $idle -lt $inactivity_limit ]]; then
+                agent_active="true"
+            fi
+        else
+            # No logs yet (slow startup, model download, dep install) — benefit of the doubt
+            agent_active="true"
+        fi
+
+        # Absolute wall-time cap — unconditional, prevents unbounded spend
+        if [[ "$absolute_max" -gt 0 ]]; then
+            local wall_elapsed=$(( now_epoch - start_time ))
+            if [[ $wall_elapsed -ge $absolute_max ]]; then
+                log "  WATCHDOG: Absolute wall-time cap ${absolute_max}s reached. Force-killing agent."
                 kill "$agent_pid" 2>/dev/null || true
                 sleep 2
                 kill -9 "$agent_pid" 2>/dev/null || true
@@ -599,26 +780,38 @@ watchdog_run() {
             fi
         fi
 
-        local latest_log
-        latest_log=$(get_newest_aider_log "$log_dir")
-
-        if [[ -n "$latest_log" ]] && [[ -f "$latest_log" ]]; then
-            local file_mtime
-            file_mtime=$(get_mtime "$latest_log")
-            local now_epoch
-            now_epoch=$(date +%s)
-            local idle=$(( now_epoch - file_mtime ))
-
-            if [[ $idle -ge $inactivity_limit ]]; then
-                log "  WATCHDOG: No log activity for ${idle}s (limit: ${inactivity_limit}s). Agent appears stuck."
-                log "  WATCHDOG: Last active log: $(basename "$(dirname "$latest_log")")"
-                log "  WATCHDOG: Killing agent (PID ${agent_pid})."
-                kill "$agent_pid" 2>/dev/null || true
-                sleep 2
-                kill -9 "$agent_pid" 2>/dev/null || true
-                wait "$agent_pid" 2>/dev/null || true
-                return 124
+        # Hard timeout: only kill if the agent is also inactive
+        if [[ "$hard_timeout" -gt 0 ]]; then
+            local elapsed=$(( now_epoch - start_time ))
+            if [[ $elapsed -ge $hard_timeout ]]; then
+                if [[ "$agent_active" == "true" ]]; then
+                    if [[ "$hard_timeout_warned" == "false" ]]; then
+                        log "  WATCHDOG: Hard timeout ${hard_timeout}s reached but agent is still active (last write ${idle}s ago). Letting it continue."
+                        hard_timeout_warned="true"
+                    fi
+                else
+                    log "  WATCHDOG: Hard timeout ${hard_timeout}s reached and agent inactive (${idle}s). Killing agent."
+                    kill "$agent_pid" 2>/dev/null || true
+                    sleep 2
+                    kill -9 "$agent_pid" 2>/dev/null || true
+                    wait "$agent_pid" 2>/dev/null || true
+                    return 124
+                fi
             fi
+        fi
+
+        # Inactivity timeout: kill if no log writes within the limit
+        if [[ "$latest_mtime" -gt 0 ]] && [[ "$agent_active" == "false" ]]; then
+            log "  WATCHDOG: No log activity for ${idle}s (limit: ${inactivity_limit}s). Agent appears stuck."
+            if [[ -n "$latest_log" ]] && [[ -f "$latest_log" ]]; then
+                log "  WATCHDOG: Last aider log: $(basename "$(dirname "$latest_log")")"
+            fi
+            log "  WATCHDOG: Killing agent (PID ${agent_pid})."
+            kill "$agent_pid" 2>/dev/null || true
+            sleep 2
+            kill -9 "$agent_pid" 2>/dev/null || true
+            wait "$agent_pid" 2>/dev/null || true
+            return 124
         fi
     done
 
@@ -650,7 +843,7 @@ run_agent() {
     cmd+=(--no-show-rich-progress)
 
     local agent_log="${log_dir}/agent_run.log"
-    log "  Running agent (watchdog: inactivity=${INACTIVITY_TIMEOUT}s, hard=${STAGE_TIMEOUT}s)"
+    log "  Running agent (watchdog: inactivity=${INACTIVITY_TIMEOUT}s, hard=${STAGE_TIMEOUT}s, wall-cap=${MAX_WALL_TIME}s)"
     log "  Command: ${cmd[*]}"
     log "  Output → ${agent_log}"
 
@@ -662,7 +855,7 @@ run_agent() {
     local agent_pid=$!
     AGENT_PID=$agent_pid
 
-    watchdog_run "$agent_pid" "$log_dir" "$INACTIVITY_TIMEOUT" "$STAGE_TIMEOUT"
+    watchdog_run "$agent_pid" "$log_dir" "$INACTIVITY_TIMEOUT" "$STAGE_TIMEOUT" "$MAX_WALL_TIME"
     AGENT_RC=$?
     AGENT_PID=""
     set -e
@@ -1120,14 +1313,20 @@ cleanup() {
     fi
 
     if [[ "$PIPELINE_SUCCESS" == "true" ]]; then
-        rm -f "$COMMIT0_CONFIG" "$AGENT_CONFIG" 2>/dev/null || true
+        for _si in $(seq 1 "$NUM_SAMPLES"); do
+            set_sample_vars "$_si"
+            rm -f "$COMMIT0_CONFIG" "$AGENT_CONFIG" 2>/dev/null || true
+        done
         log "Cleaned up per-run config files"
     else
-        if [[ -f "$COMMIT0_CONFIG" ]] || [[ -f "$AGENT_CONFIG" ]]; then
-            log "Pipeline did not complete successfully. Config files preserved for debugging:"
-            [[ -f "$COMMIT0_CONFIG" ]] && log "  ${COMMIT0_CONFIG}"
-            [[ -f "$AGENT_CONFIG" ]] && log "  ${AGENT_CONFIG}"
-        fi
+        for _si in $(seq 1 "$NUM_SAMPLES"); do
+            set_sample_vars "$_si"
+            if [[ -f "$COMMIT0_CONFIG" ]] || [[ -f "$AGENT_CONFIG" ]]; then
+                log "Pipeline did not complete successfully. Config files preserved for debugging:"
+                [[ -f "$COMMIT0_CONFIG" ]] && log "  ${COMMIT0_CONFIG}"
+                [[ -f "$AGENT_CONFIG" ]] && log "  ${AGENT_CONFIG}"
+            fi
+        done
     fi
 }
 trap cleanup EXIT
@@ -1213,11 +1412,93 @@ for entry in ds:
 " 2>&1 | while IFS= read -r line; do log "$line"; done
 }
 
+verify_spec_docs() {
+    if [[ "$USE_SPEC_INFO" != "true" ]]; then
+        return 0
+    fi
+
+    log "Verifying all repos have spec docs..."
+
+    local missing=0
+    local missing_repos=""
+
+    local repo_list
+    if [[ "$DATASET_FILE" != wentingzhao/* ]] && [[ -f "$DATASET_FILE" ]]; then
+        repo_list=$(_PIPELINE_DATASET_FILE="$DATASET_FILE" "$VENV_PYTHON" -c "
+import json, os
+with open(os.environ['_PIPELINE_DATASET_FILE']) as f:
+    data = json.load(f)
+if isinstance(data, dict) and 'data' in data:
+    data = data['data']
+for item in data:
+    print(item['repo'].split('/')[-1])
+" 2>/dev/null || true)
+    else
+        repo_list=$("$VENV_PYTHON" -c "
+from commit0.harness.constants import SPLIT
+for r in sorted(SPLIT.get('${REPO_SPLIT}', [])):
+    print(r)
+" 2>/dev/null || true)
+    fi
+
+    if [[ -z "$repo_list" ]]; then
+        log "  WARNING: Could not enumerate repos for spec verification."
+        return 0
+    fi
+
+    while IFS= read -r repo; do
+        [[ -z "$repo" ]] && continue
+        local repo_dir="${REPO_BASE}/${repo}"
+        if [[ ! -d "$repo_dir" ]]; then
+            continue
+        fi
+        if [[ ! -f "${repo_dir}/spec.pdf" ]] && [[ ! -f "${repo_dir}/spec.pdf.bz2" ]]; then
+            log "  MISSING spec: ${repo}"
+            missing=$((missing + 1))
+            missing_repos="${missing_repos}  - ${repo}\n"
+        else
+            log "  OK spec: ${repo}"
+        fi
+    done <<< "$repo_list"
+
+    if [[ "$missing" -gt 0 ]]; then
+        log ""
+        log "======================================================================"
+        log "FATAL: ${missing} repo(s) missing spec docs (use_spec_info=true)."
+        log "  The pipeline requires spec docs for all repos when --no-spec-info"
+        log "  is not set. Missing repos:"
+        echo -e "$missing_repos" | while IFS= read -r line; do [[ -n "$line" ]] && log "$line"; done
+        log ""
+        log "  Options:"
+        log "    1. Place spec.pdf or spec.pdf.bz2 in each repo directory"
+        log "    2. Add 'specification' URLs to the dataset JSON and re-run"
+        log "    3. Use --no-spec-info to run without spec context"
+        log "======================================================================"
+        return 1
+    fi
+
+    log "  All repos have spec docs. ✓"
+}
+
 # ============================================================
 # Main
 # ============================================================
 
-main() {
+# All per-sample pipeline result files, collected for pass@k aggregation
+declare -a SAMPLE_RESULT_FILES=()
+
+run_single_sample() {
+    local sample_idx="$1"
+
+    set_sample_vars "$sample_idx"
+
+    if [[ "$NUM_SAMPLES" -gt 1 ]]; then
+        log ""
+        log "############################################################"
+        log "# RUN ${sample_idx} of ${NUM_SAMPLES}  (pass@${NUM_SAMPLES})"
+        log "############################################################"
+    fi
+
     log "======================================================================"
     log "Commit0 SDE-I 3-Stage Pipeline"
     log "Model:        ${MODEL_NAME} (${MODEL_SHORT})"
@@ -1227,8 +1508,10 @@ main() {
     log "Backend:      ${BACKEND}"
     log "Cache:        ${CACHE_PROMPTS}"
     log "Max Iter:     ${MAX_ITERATION}"
+    log "Num Samples:  ${NUM_SAMPLES} (run_${sample_idx})"
     log "Stage Timeout: ${STAGE_TIMEOUT}s (0=disabled) | Eval Timeout: ${EVAL_TIMEOUT}s"
     log "Inactivity:   ${INACTIVITY_TIMEOUT}s (watchdog kills stuck agents)"
+    log "Wall-time cap: ${MAX_WALL_TIME}s (unconditional, 0=disable)"
     log "Spec Info:    ${USE_SPEC_INFO}"
     if [[ "$NO_STAGE3_LINT" == "true" ]]; then
         log "Stage3 Lint:  DISABLED (--no-stage3-lint)"
@@ -1243,17 +1526,24 @@ main() {
     log "Start time:   $(ts)"
     log "======================================================================"
 
-    preflight
+    if [[ "$sample_idx" -eq 1 ]]; then
+        preflight
+    fi
 
     write_commit0_config
 
-    ensure_spec_docs
+    if [[ "$sample_idx" -eq 1 ]]; then
+        ensure_spec_docs
+        if ! verify_spec_docs; then
+            return 1
+        fi
+    fi
 
     if [[ -n "$SKIP_TO_STAGE" ]]; then
         if [[ ! -f "$PIPELINE_LOG" ]]; then
             log "ERROR: Cannot skip to stage ${SKIP_TO_STAGE}: no prior results found at ${PIPELINE_LOG}"
             log "  Run a full pipeline first, then use --skip-to-stage."
-            exit 1
+            return 1
         fi
         RESULTS_JSON=$(cat "$PIPELINE_LOG")
         local loaded_ok="true"
@@ -1261,20 +1551,25 @@ main() {
             echo "$RESULTS_JSON" | jq -e '.stage1' >/dev/null 2>&1 || loaded_ok="false"
             if [[ "$loaded_ok" == "false" ]]; then
                 log "ERROR: Prior results missing stage1 data. Cannot skip to stage 2."
-                exit 1
+                return 1
             fi
         elif [[ "$SKIP_TO_STAGE" == "3" ]]; then
             echo "$RESULTS_JSON" | jq -e '.stage1' >/dev/null 2>&1 || loaded_ok="false"
             echo "$RESULTS_JSON" | jq -e '.stage2' >/dev/null 2>&1 || loaded_ok="false"
             if [[ "$loaded_ok" == "false" ]]; then
                 log "ERROR: Prior results missing stage1/stage2 data. Cannot skip to stage 3."
-                exit 1
+                return 1
             fi
         fi
         log "  Loaded prior results from: ${PIPELINE_LOG}"
     else
         init_results
     fi
+
+    RESULTS_JSON=$(echo "$RESULTS_JSON" | jq \
+        --argjson sample_idx "$sample_idx" \
+        --argjson num_samples "$NUM_SAMPLES" \
+        '.sample_index = $sample_idx | .num_samples = $num_samples')
 
     local pipeline_error=""
 
@@ -1322,9 +1617,95 @@ main() {
 
     print_summary_table
     save_results
-    log "Results saved to: ${PIPELINE_LOG}"
-    log "Pipeline complete."
-    PIPELINE_SUCCESS="true"
+    log "run_${sample_idx} results saved to: ${PIPELINE_LOG}"
+
+    SAMPLE_RESULT_FILES+=("$PIPELINE_LOG")
+}
+
+print_pass_at_k_summary() {
+    local k="$NUM_SAMPLES"
+    log ""
+    log "=========================================================================================="
+    log "PASS@${k} SUMMARY — ${MODEL_SHORT} / ${DATASET_SHORT}"
+    log "=========================================================================================="
+    log ""
+
+    printf -v header "%-12s %14s %14s %14s %12s" "Run" "S1 Pass Rate" "S2 Pass Rate" "S3 Pass Rate" "S3 Cost"
+    log "$header"
+    log "--------------------------------------------------------------------------------------------"
+
+    local best_s3_rate="0"
+    local best_s3_sample=1
+
+    for result_file in "${SAMPLE_RESULT_FILES[@]}"; do
+        if [[ ! -f "$result_file" ]]; then
+            continue
+        fi
+        local rj
+        rj=$(cat "$result_file")
+
+        local sidx s1r s2r s3r s3c
+        sidx=$(echo "$rj" | jq -r '.sample_index // "?"')
+        s1r=$(echo "$rj" | jq -r '.stage1.pass_rate // 0')
+        s2r=$(echo "$rj" | jq -r '.stage2.pass_rate // 0')
+        s3r=$(echo "$rj" | jq -r '.stage3.pass_rate // 0')
+        s3c=$(echo "$rj" | jq -r '.stage3.cost_usd_cumulative // .stage1.cost_usd // 0')
+
+        local s1_pct s2_pct s3_pct cost_str
+        s1_pct=$(format_pct "$s1r")
+        s2_pct=$(format_pct "$s2r")
+        s3_pct=$(format_pct "$s3r")
+        cost_str=$(printf "\$%.2f" "$s3c")
+
+        printf -v row "%-12s %14s %14s %14s %12s" "run_${sidx}" "$s1_pct" "$s2_pct" "$s3_pct" "$cost_str"
+        log "$row"
+
+        local is_better
+        is_better=$(echo "$s3r > $best_s3_rate" | bc -l)
+        if [[ "$is_better" -eq 1 ]]; then
+            best_s3_rate="$s3r"
+            best_s3_sample="$sidx"
+        fi
+    done
+
+    log "--------------------------------------------------------------------------------------------"
+    local best_pct
+    best_pct=$(format_pct "$best_s3_rate")
+    log "Best-of-${k} (pass@${k}):  run_${best_s3_sample}  →  ${best_pct}"
+    log "=========================================================================================="
+    log ""
+}
+
+SAMPLES_COMPLETED=0
+
+main() {
+    for sample_idx in $(seq 1 "$NUM_SAMPLES"); do
+        if run_single_sample "$sample_idx"; then
+            SAMPLES_COMPLETED=$((SAMPLES_COMPLETED + 1))
+        else
+            log "WARNING: run_${sample_idx} failed — continuing with remaining samples."
+        fi
+    done
+
+    RUN_ID="${BASE_RUN_ID}"
+
+    if [[ "$NUM_SAMPLES" -gt 1 ]]; then
+        if [[ "$SAMPLES_COMPLETED" -gt 0 ]]; then
+            print_pass_at_k_summary
+        else
+            log "ERROR: All ${NUM_SAMPLES} samples failed. No pass@k summary."
+        fi
+    fi
+
+    if [[ "$SAMPLES_COMPLETED" -eq "$NUM_SAMPLES" ]]; then
+        log "Pipeline complete. All ${NUM_SAMPLES} sample(s) succeeded."
+        PIPELINE_SUCCESS="true"
+    elif [[ "$SAMPLES_COMPLETED" -gt 0 ]]; then
+        log "Pipeline complete. ${SAMPLES_COMPLETED}/${NUM_SAMPLES} sample(s) succeeded."
+        PIPELINE_SUCCESS="true"
+    else
+        log "Pipeline FAILED. No samples completed successfully."
+    fi
 }
 
 cd "$BASE_DIR"

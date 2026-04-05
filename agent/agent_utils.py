@@ -392,7 +392,6 @@ def get_message(
     else:
         unit_tests_info = ""
 
-    # TODO: assuming we have specification, which we currently do not have
     if agent_config.use_repo_info:
         repo_info = (
             f"\n{REPO_INFO_HEADER} "
