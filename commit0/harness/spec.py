@@ -1,5 +1,6 @@
 import hashlib
 import logging
+import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Union, cast, Optional
@@ -95,8 +96,12 @@ class Spec(ABC):
 
     @property
     def platform(self) -> str:
-        """Comma-separated platforms for multi-arch OCI tarball builds."""
-        return "linux/amd64,linux/arm64"
+        """Comma-separated platforms for multi-arch OCI tarball builds.
+
+        Override via COMMIT0_BUILD_PLATFORMS env var (e.g. "linux/amd64" for
+        single-arch builds).
+        """
+        return os.environ.get("COMMIT0_BUILD_PLATFORMS", "linux/amd64,linux/arm64")
 
     @abstractmethod
     def make_repo_script_list(self) -> list[str]:

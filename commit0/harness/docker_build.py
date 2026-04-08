@@ -4,6 +4,7 @@ import platform as _platform
 import re
 import shutil
 import subprocess
+import tarfile
 import traceback
 import docker
 import docker.errors
@@ -21,6 +22,7 @@ from commit0.harness.spec import get_specs_from_dataset
 from commit0.harness.utils import setup_logger, close_logger
 
 ansi_escape = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
+_logger = logging.getLogger(__name__)
 
 
 def _native_platform() -> str:
@@ -61,7 +63,7 @@ def _safe_builder_args() -> list[str]:
                     return ["--builder", candidate]
             return []  # best-effort: let buildx figure it out
     except Exception:
-        pass
+        _logger.debug("_safe_builder_args: failed to probe builders", exc_info=True)
     return []  # current builder is fine
 
 
@@ -88,7 +90,11 @@ def _multiarch_builder_args() -> list[str]:
         ):
             return ["--builder", MULTIARCH_BUILDER_NAME]
     except Exception:
-        pass
+        _logger.debug(
+            "multiarch: failed to inspect dedicated builder %s",
+            MULTIARCH_BUILDER_NAME,
+            exc_info=True,
+        )
 
     # 2. Check if the current default builder already uses docker-container
     try:
@@ -100,7 +106,7 @@ def _multiarch_builder_args() -> list[str]:
         if "docker-container" in (result.stdout + result.stderr):
             return []  # current default is suitable
     except Exception:
-        pass
+        _logger.debug("multiarch: failed to inspect default builder", exc_info=True)
 
     # 3. Create a new docker-container builder
     try:
@@ -121,7 +127,29 @@ def _multiarch_builder_args() -> list[str]:
         )
         return ["--builder", MULTIARCH_BUILDER_NAME]
     except Exception:
+        _logger.debug(
+            "multiarch: failed to create builder %s",
+            MULTIARCH_BUILDER_NAME,
+            exc_info=True,
+        )
         return []  # best-effort: let buildx figure it out
+
+
+def _ensure_oci_layout(oci_tar: Path) -> Path | None:
+    """Extract an OCI tarball to an OCI layout directory (idempotent)."""
+    layout_dir = oci_tar.parent / "oci-layout"
+    if (layout_dir / "index.json").exists():
+        return layout_dir
+    if not oci_tar.exists() or oci_tar.stat().st_size == 0:
+        return None
+    try:
+        layout_dir.mkdir(parents=True, exist_ok=True)
+        with tarfile.open(oci_tar) as tf:
+            tf.extractall(layout_dir)
+        return layout_dir
+    except Exception:
+        _logger.debug("Failed to extract OCI layout from %s", oci_tar, exc_info=True)
+        return None
 
 
 PROXY_ENV_KEYS = [
@@ -272,11 +300,29 @@ def build_image(
         oci_tar_path = oci_dir / f"{image_name.replace(':', '__')}.tar"
 
         multiarch_flags = _multiarch_builder_args()
+        build_context_flags: list[str] = []
+        if multiarch_flags and "commit0.base:latest" in dockerfile:
+            base_oci_tar = (
+                OCI_IMAGE_DIR / "commit0.base__latest" / "commit0.base__latest.tar"
+            )
+            layout_dir = _ensure_oci_layout(base_oci_tar)
+            if layout_dir:
+                build_context_flags = [
+                    "--build-context",
+                    f"commit0.base:latest=oci-layout://{layout_dir}",
+                ]
+            else:
+                _logger.warning(
+                    "Base OCI layout not available at %s; "
+                    "docker-container builder may fail to resolve FROM commit0.base:latest",
+                    base_oci_tar,
+                )
         oci_cmd = [
             "docker",
             "buildx",
             "build",
             *multiarch_flags,
+            *build_context_flags,
             "--platform",
             platform,
             "--tag",
@@ -294,8 +340,15 @@ def build_image(
         if oci_result.returncode != 0:
             logger.warning(
                 f"OCI tarball build failed (non-fatal, skipping ECR export): "
+                f"rc={oci_result.returncode} "
                 f"{oci_result.stderr.splitlines()[-1] if oci_result.stderr else 'unknown error'}"
             )
+            if oci_tar_path.exists() and oci_tar_path.stat().st_size == 0:
+                oci_tar_path.unlink()
+                _logger.debug("Removed 0-byte OCI tarball: %s", oci_tar_path)
+            if oci_dir.exists() and not any(oci_dir.iterdir()):
+                oci_dir.rmdir()
+                _logger.debug("Removed empty OCI dir: %s", oci_dir)
         else:
             logger.info(f"OCI tarball saved to {oci_tar_path}")
 

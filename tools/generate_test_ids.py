@@ -25,6 +25,7 @@ import bz2
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -281,7 +282,7 @@ def validate_base_commit_docker(
     bash_cmd = (
         f"cd /testbed && source .venv/bin/activate && "
         f"python -m pytest --collect-only --override-ini='addopts=' "
-        f"-p no:cacheprovider {test_dir} 2>&1 | tail -20"
+        f"-p no:cacheprovider {test_dir} 2>&1; true"
     )
 
     try:
@@ -305,6 +306,19 @@ def validate_base_commit_docker(
         return 0, "timeout"
 
     test_ids = _parse_collect_output(stdout)
+    # Fallback: if parser found 0 IDs but pytest summary reports tests were collected,
+    # return the summary count so the pipeline knows collection partially worked.
+    if not test_ids:
+        m = re.search(r"(\d+)\s+tests?\s+collected", stdout)
+        if m:
+            count = int(m.group(1))
+            logger.info(
+                "  Parser found 0 individual test IDs but summary reports %d collected; "
+                "reporting summary count",
+                count,
+            )
+            stderr_snippet = stdout[-500:] if stdout else ""
+            return count, stderr_snippet
     stderr_snippet = stdout[-500:] if stdout else ""
     return len(test_ids), stderr_snippet
 
