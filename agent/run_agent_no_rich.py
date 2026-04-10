@@ -186,6 +186,7 @@ def run_agent_for_repo(
                         branch, backend, commit0_config_file
                     )
         elif agent_config.run_entire_dir_lint:
+            message = get_message(agent_config, repo_path, test_files=test_files)
             for lint_file in lint_files:
                 lint_file_name = lint_file.replace(".py", "").replace("/", "__")
                 lint_log_dir = experiment_log_dir / lint_file_name
