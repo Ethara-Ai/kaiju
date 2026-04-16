@@ -311,8 +311,6 @@ def get_target_edit_files(
     for file_path in files:
         with open(file_path, "r", encoding="utf-8-sig", errors="ignore") as file:
             content = file.read()
-            if len(content.splitlines()) > 1500:
-                continue
             if "    pass" in content:
                 # Verify the file actually has stubs by checking it differs from
                 # the reference commit. Files with only abstract method `pass` or
