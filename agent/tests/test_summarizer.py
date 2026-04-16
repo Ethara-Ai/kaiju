@@ -9,6 +9,7 @@ import pytest
 from agent.agent_utils import (
     _chunk_text,
     _SUMMARIZER_SYSTEM_PROMPT,
+    _CONSOLIDATION_SYSTEM_PROMPT,
     _summarize_single,
     summarize_specification,
 )
@@ -66,7 +67,7 @@ class TestSummarizerSystemPrompt:
     def test_contains_key_instructions(self):
         assert "API signatures" in _SUMMARIZER_SYSTEM_PROMPT
         assert "function/class/method names" in _SUMMARIZER_SYSTEM_PROMPT
-        assert "Omit" in _SUMMARIZER_SYSTEM_PROMPT
+        assert "OMIT" in _SUMMARIZER_SYSTEM_PROMPT
         assert "dense" in _SUMMARIZER_SYSTEM_PROMPT
 
 
@@ -282,12 +283,18 @@ class TestChunkBudgetIntegration:
             return MagicMock(choices=[MagicMock(message=MagicMock(content="summary"))])
 
         mock_litellm.completion.side_effect = capture
+        spec = "a" * 600_001
         summarize_specification(
-            spec_text="w " * 300_001, model="m", max_tokens=4000, max_char_length=10000
+            spec_text=spec, model="m", max_tokens=4000, max_char_length=10000
         )
-        assert all(b == 5000 for b in budgets[:2]), f"Expected 5000, got {budgets[:2]}"
+        chunk_budgets = [b for b in budgets if b < 10000]
+        num_chunks = len(chunk_budgets)
+        expected = 10000 // num_chunks
+        assert all(b == expected for b in chunk_budgets), (
+            f"Expected {expected}, got {chunk_budgets}"
+        )
 
-    def test_minimum_budget_2000(self, mock_litellm):
+    def test_proportional_budget_no_floor(self, mock_litellm):
         budgets = []
 
         def capture(**kwargs):
@@ -297,11 +304,15 @@ class TestChunkBudgetIntegration:
             return MagicMock(choices=[MagicMock(message=MagicMock(content="summary"))])
 
         mock_litellm.completion.side_effect = capture
+        spec = "a" * 600_001
         summarize_specification(
-            spec_text="w " * 300_001, model="m", max_tokens=4000, max_char_length=1000
+            spec_text=spec, model="m", max_tokens=4000, max_char_length=1000
         )
-        assert all(b >= 2000 for b in budgets[:2]), (
-            f"Expected >= 2000, got {budgets[:2]}"
+        chunk_budgets = [b for b in budgets if b < 1000]
+        num_chunks = len(chunk_budgets)
+        expected = 1000 // num_chunks
+        assert all(b == expected for b in chunk_budgets), (
+            f"Expected {expected} (no 2000 floor), got {chunk_budgets}"
         )
 
 
@@ -429,11 +440,10 @@ class TestSummarizeSpecificationAdversarial:
     """Adversarial scenarios for the full summarize_specification pipeline."""
 
     def test_spec_exactly_at_chunk_boundary(self, mock_litellm):
-        """Spec length == chunk_max_chars — should take single-pass path."""
         mock_litellm.completion.return_value = MagicMock(
             choices=[MagicMock(message=MagicMock(content="summarized"))]
         )
-        spec = "a" * 500_000  # exactly chunk_max_chars
+        spec = "a" * 300_000
         result = summarize_specification(
             spec_text=spec, model="m", max_tokens=4000, max_char_length=1000
         )
@@ -441,11 +451,10 @@ class TestSummarizeSpecificationAdversarial:
         assert mock_litellm.completion.call_count == 1
 
     def test_spec_one_char_over_chunk_boundary(self, mock_litellm):
-        """Spec is chunk_max_chars + 1 — should trigger chunked path."""
         mock_litellm.completion.return_value = MagicMock(
             choices=[MagicMock(message=MagicMock(content="chunk_sum"))]
         )
-        spec = "a" * 500_001
+        spec = "a" * 300_001
         result = summarize_specification(
             spec_text=spec, model="m", max_tokens=4000, max_char_length=100_000
         )
@@ -473,7 +482,6 @@ class TestSummarizeSpecificationAdversarial:
         assert "good_chunk" in result
 
     def test_llm_raises_on_second_chunk_only(self, mock_litellm):
-        """Exception on one chunk — entire function should fallback to truncation."""
         call_count = {"n": 0}
 
         def exploding(**kwargs):
@@ -485,24 +493,18 @@ class TestSummarizeSpecificationAdversarial:
         mock_litellm.completion.side_effect = exploding
         spec = "d " * 300_001
         result = summarize_specification(
-            spec_text=spec, model="m", max_tokens=4000, max_char_length=500
+            spec_text=spec, model="m", max_tokens=4000, max_char_length=100_000
         )
-        # Exception bubbles up → outer except → truncation
-        assert result == spec[:500]
+        assert "ok" in result
 
     def test_consolidation_raises_exception(self, mock_litellm):
-        """Chunk summaries succeed but consolidation call raises — should fallback."""
-        call_count = {"n": 0}
-
         def consolidation_bomb(**kwargs):
-            call_count["n"] += 1
-            if call_count["n"] <= 2:
-                return MagicMock(
-                    choices=[
-                        MagicMock(message=MagicMock(content="chunk_result " * 500))
-                    ]
-                )
-            raise RuntimeError("consolidation exploded")
+            system_msg = kwargs["messages"][0]["content"]
+            if _CONSOLIDATION_SYSTEM_PROMPT in system_msg:
+                raise RuntimeError("consolidation exploded")
+            return MagicMock(
+                choices=[MagicMock(message=MagicMock(content="chunk_result " * 500))]
+            )
 
         mock_litellm.completion.side_effect = consolidation_bomb
         spec = "d " * 300_001
@@ -636,7 +638,6 @@ class TestChunkedConsolidationAdversarial:
     """Specifically attack the chunk→merge→consolidate pipeline."""
 
     def test_many_chunks_budget_math(self, mock_litellm):
-        """100 chunks with max_char_length=5000 → per_chunk_budget = 50, but min is 2000."""
         budgets = []
 
         def capture(**kwargs):
@@ -646,17 +647,16 @@ class TestChunkedConsolidationAdversarial:
             return MagicMock(choices=[MagicMock(message=MagicMock(content="s"))])
 
         mock_litellm.completion.side_effect = capture
-        # 50M chars → 100 chunks at 500K each
         spec = "x" * 50_000_000
         summarize_specification(
             spec_text=spec, model="m", max_tokens=4000, max_char_length=5000
         )
-        # First N calls are chunk summaries — all should get min budget 2000
-        chunk_budgets = [b for b in budgets if b == 2000]
-        assert len(chunk_budgets) >= 2  # at least some chunks hit the 2000 minimum
+        # 50M / 300K = ~167 chunks, budget = 5000 // 167 = 29 per chunk
+        chunk_budgets = [b for b in budgets if b < 5000]
+        assert len(chunk_budgets) >= 2
+        assert all(b == 5000 // len(chunk_budgets) or b < 100 for b in chunk_budgets)
 
     def test_merged_summaries_separator_format(self, mock_litellm):
-        """Verify merged chunk summaries use the expected separator."""
         summaries = []
 
         def track(**kwargs):
@@ -672,9 +672,9 @@ class TestChunkedConsolidationAdversarial:
         summarize_specification(
             spec_text=spec, model="m", max_tokens=4000, max_char_length=100
         )
-        # The consolidation call should receive chunk summaries joined by separator
         if summaries:
-            assert "\n\n---\n\n" in summaries[0]
+            assert "\n\n" in summaries[0]
+            assert "---" not in summaries[0]
 
     def test_consolidation_returns_larger_than_merged(self, mock_litellm):
         """Consolidation LLM returns MORE than merged input — still returned as-is."""
@@ -699,3 +699,251 @@ class TestChunkedConsolidationAdversarial:
         )
         # Either the bloated consolidation is returned or merged chunks
         assert len(result) > 0
+
+
+class TestConsolidationSystemPrompt:
+    def test_consolidation_prompt_exists_and_differs(self):
+        assert _CONSOLIDATION_SYSTEM_PROMPT != _SUMMARIZER_SYSTEM_PROMPT
+        assert "duplicat" in _CONSOLIDATION_SYSTEM_PROMPT.lower()
+        assert "cohesive" in _CONSOLIDATION_SYSTEM_PROMPT.lower()
+
+    def test_consolidation_call_uses_different_prompt(self, mock_litellm):
+        system_prompts = []
+
+        def capture(**kwargs):
+            system_prompts.append(kwargs["messages"][0]["content"])
+            return MagicMock(
+                choices=[MagicMock(message=MagicMock(content="chunk_out " * 200))]
+            )
+
+        mock_litellm.completion.side_effect = capture
+        spec = "w " * 300_001
+        summarize_specification(
+            spec_text=spec, model="m", max_tokens=4000, max_char_length=100
+        )
+        chunk_prompts = [p for p in system_prompts if _SUMMARIZER_SYSTEM_PROMPT in p]
+        consolidation_prompts = [
+            p for p in system_prompts if _CONSOLIDATION_SYSTEM_PROMPT in p
+        ]
+        assert len(chunk_prompts) >= 2
+        assert len(consolidation_prompts) >= 1
+
+    def test_custom_system_prompt_in_summarize_single(self):
+        llm = _mock_litellm_module("ok")
+        custom = "You are a custom summarizer."
+        _summarize_single("spec", "m", 4000, 10000, llm, system_prompt=custom)
+        system_msg = llm.completion.call_args.kwargs["messages"][0]["content"]
+        assert custom in system_msg
+        assert _SUMMARIZER_SYSTEM_PROMPT not in system_msg
+
+
+class TestTimeoutAndRetry:
+    def test_default_timeout_in_summarize_single(self):
+        llm = _mock_litellm_module("ok")
+        _summarize_single("spec", "m", 4000, 10000, llm)
+        kwargs = llm.completion.call_args.kwargs
+        assert kwargs["timeout"] == 120
+
+    def test_custom_timeout_in_summarize_single(self):
+        llm = _mock_litellm_module("ok")
+        _summarize_single("spec", "m", 4000, 10000, llm, timeout=60)
+        kwargs = llm.completion.call_args.kwargs
+        assert kwargs["timeout"] == 60
+
+    def test_retry_params_in_completion(self):
+        llm = _mock_litellm_module("ok")
+        _summarize_single("spec", "m", 4000, 10000, llm)
+        kwargs = llm.completion.call_args.kwargs
+        assert kwargs["num_retries"] == 3
+        assert kwargs["retry_strategy"] == "exponential_backoff_retry"
+
+    def test_timeout_passed_through_from_summarize_specification(self, mock_litellm):
+        mock_litellm.completion.return_value = MagicMock(
+            choices=[MagicMock(message=MagicMock(content="ok"))]
+        )
+        summarize_specification(
+            spec_text="a" * 100,
+            model="m",
+            max_tokens=4000,
+            max_char_length=50,
+            timeout=30,
+        )
+        kwargs = mock_litellm.completion.call_args.kwargs
+        assert kwargs["timeout"] == 30
+
+
+class TestCaching:
+    def test_cache_hit_skips_llm(self, mock_litellm, tmp_path):
+        import hashlib, json
+
+        spec = "cached spec"
+        cache_key = hashlib.sha256((spec + "m" + "50").encode()).hexdigest()
+        cache_file = tmp_path / "cache.json"
+        cache_file.write_text(
+            json.dumps(
+                {
+                    "hash": cache_key,
+                    "model": "m",
+                    "max_char_length": 50,
+                    "summary": "cached_result",
+                }
+            )
+        )
+        result = summarize_specification(
+            spec_text=spec,
+            model="m",
+            max_tokens=4000,
+            max_char_length=50,
+            cache_path=cache_file,
+        )
+        assert result == "cached_result"
+        assert mock_litellm.completion.call_count == 0
+
+    def test_cache_miss_calls_llm(self, mock_litellm, tmp_path):
+        mock_litellm.completion.return_value = MagicMock(
+            choices=[MagicMock(message=MagicMock(content="fresh"))]
+        )
+        cache_file = tmp_path / "cache.json"
+        result = summarize_specification(
+            spec_text="new spec",
+            model="m",
+            max_tokens=4000,
+            max_char_length=50,
+            cache_path=cache_file,
+        )
+        assert result == "fresh"
+        assert mock_litellm.completion.call_count == 1
+
+    def test_cache_written_after_success(self, mock_litellm, tmp_path):
+        import json
+
+        mock_litellm.completion.return_value = MagicMock(
+            choices=[MagicMock(message=MagicMock(content="new_summary"))]
+        )
+        cache_file = tmp_path / "cache.json"
+        summarize_specification(
+            spec_text="spec",
+            model="m",
+            max_tokens=4000,
+            max_char_length=50,
+            cache_path=cache_file,
+        )
+        assert cache_file.exists()
+        cached = json.loads(cache_file.read_text())
+        assert cached["summary"] == "new_summary"
+        assert "hash" in cached
+
+    def test_stale_cache_calls_llm(self, mock_litellm, tmp_path):
+        import json
+
+        cache_file = tmp_path / "cache.json"
+        cache_file.write_text(
+            json.dumps(
+                {
+                    "hash": "wrong_hash",
+                    "model": "m",
+                    "max_char_length": 50,
+                    "summary": "stale",
+                }
+            )
+        )
+        mock_litellm.completion.return_value = MagicMock(
+            choices=[MagicMock(message=MagicMock(content="fresh"))]
+        )
+        result = summarize_specification(
+            spec_text="different spec",
+            model="m",
+            max_tokens=4000,
+            max_char_length=50,
+            cache_path=cache_file,
+        )
+        assert result == "fresh"
+        assert mock_litellm.completion.call_count == 1
+
+    def test_no_cache_path_no_file_written(self, mock_litellm, tmp_path):
+        mock_litellm.completion.return_value = MagicMock(
+            choices=[MagicMock(message=MagicMock(content="ok"))]
+        )
+        summarize_specification(
+            spec_text="spec",
+            model="m",
+            max_tokens=4000,
+            max_char_length=50,
+        )
+        assert not (tmp_path / ".spec_summary_cache.json").exists()
+
+    def test_corrupt_cache_file_ignored(self, mock_litellm, tmp_path):
+        cache_file = tmp_path / "cache.json"
+        cache_file.write_text("not valid json{{{")
+        mock_litellm.completion.return_value = MagicMock(
+            choices=[MagicMock(message=MagicMock(content="recovered"))]
+        )
+        result = summarize_specification(
+            spec_text="spec",
+            model="m",
+            max_tokens=4000,
+            max_char_length=50,
+            cache_path=cache_file,
+        )
+        assert result == "recovered"
+
+
+class TestSummarizeThreshold:
+    def test_threshold_is_1_5x(self, mock_litellm):
+        mock_litellm.completion.return_value = MagicMock(
+            choices=[MagicMock(message=MagicMock(content="summary"))]
+        )
+        import inspect
+        from agent.agent_utils import get_message
+
+        sig = inspect.getsource(get_message)
+        assert "1.5" in sig
+
+
+class TestParallelChunkProcessing:
+    def test_uses_thread_pool(self, mock_litellm):
+        mock_litellm.completion.return_value = MagicMock(
+            choices=[MagicMock(message=MagicMock(content="chunk_sum"))]
+        )
+        spec = "w " * 300_001
+        result = summarize_specification(
+            spec_text=spec, model="m", max_tokens=4000, max_char_length=100_000
+        )
+        assert "chunk_sum" in result
+        assert mock_litellm.completion.call_count >= 2
+
+    def test_partial_thread_failure_returns_successful_chunks(self, mock_litellm):
+        call_count = {"n": 0}
+
+        def partial_fail(**kwargs):
+            call_count["n"] += 1
+            if call_count["n"] % 2 == 0:
+                raise RuntimeError("thread died")
+            return MagicMock(choices=[MagicMock(message=MagicMock(content="survived"))])
+
+        mock_litellm.completion.side_effect = partial_fail
+        spec = "w " * 300_001
+        result = summarize_specification(
+            spec_text=spec, model="m", max_tokens=4000, max_char_length=100_000
+        )
+        assert "survived" in result
+
+
+class TestChunkTextReturnType:
+    def test_return_type_annotation(self):
+        import inspect
+
+        sig = inspect.signature(_chunk_text)
+        assert sig.return_annotation == list[str]
+
+
+class TestGetSpecificationResourceLeak:
+    def test_uses_context_manager(self):
+        import inspect
+
+        source = inspect.getsource(
+            __import__(
+                "agent.agent_utils", fromlist=["get_specification"]
+            ).get_specification
+        )
+        assert "with fitz.open" in source

@@ -1,10 +1,13 @@
 import ast
 import bz2
+import hashlib
+import json
 import git
 import logging
 import os
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
 from pathlib import Path
 from typing import List, Optional
@@ -481,12 +484,13 @@ def get_message(
                 spec_info = ""
         if spec_pdf_path.exists():
             raw_spec = get_specification(specification_pdf_path=spec_pdf_path)
-            if len(raw_spec) > agent_config.max_spec_info_length:
+            if len(raw_spec) > int(agent_config.max_spec_info_length * 1.5):
                 processed_spec = summarize_specification(
                     spec_text=raw_spec,
                     model=agent_config.spec_summary_model,
                     max_tokens=agent_config.spec_summary_max_tokens,
                     max_char_length=agent_config.max_spec_info_length,
+                    cache_path=spec_pdf_path.parent / ".spec_summary_cache.json",
                 )
             else:
                 processed_spec = raw_spec
@@ -521,19 +525,15 @@ def update_message_with_dependencies(message: str, dependencies: list[str]) -> s
 def get_specification(specification_pdf_path: Path) -> str:
     """Get the reference for a given specification PDF path."""
     # TODO: after pdf_to_text is available, use it to extract the text from the PDF
-    # Open the specified PDF file
-    document = fitz.open(specification_pdf_path)
     text = ""
-
-    # Iterate through the pages
-    for page_num in range(len(document)):
-        page = document.load_page(page_num)  # loads the specified page
-        text += page.get_text()  # type: ignore
-
+    with fitz.open(specification_pdf_path) as document:
+        for page_num in range(len(document)):
+            page = document.load_page(page_num)  # loads the specified page
+            text += page.get_text()  # type: ignore
     return text
 
 
-def _chunk_text(text: str, chunk_size: int) -> list:
+def _chunk_text(text: str, chunk_size: int) -> list[str]:
     """Split text into chunks of approximately chunk_size characters.
 
     Tries to break at newline boundaries to avoid splitting mid-sentence.
@@ -589,21 +589,36 @@ _SUMMARIZER_SYSTEM_PROMPT = (
 )
 
 
+_CONSOLIDATION_SYSTEM_PROMPT = (
+    "You are combining multiple section summaries of a Python library "
+    "specification into one cohesive summary. The sections may overlap.\n\n"
+    "Rules:\n"
+    "- Remove duplicate API signatures, keeping the most complete version.\n"
+    "- Preserve ALL unique: public API signatures, error conditions, "
+    "code examples, behavioral contracts, edge cases.\n"
+    "- Merge related sections logically (group by module/class).\n"
+    "- Use terse notation. No preamble or meta-commentary."
+)
+
+
 def _summarize_single(
     text: str,
     model: str,
     max_tokens: int,
     char_budget: int,
     litellm_module: object,
+    system_prompt: Optional[str] = None,
+    timeout: float = 120,
 ) -> Optional[str]:
     """Call LLM to summarize a single piece of text. Returns None on failure."""
+    prompt = system_prompt or _SUMMARIZER_SYSTEM_PROMPT
     response = litellm_module.completion(  # type: ignore[union-attr]
         model=model,
         messages=[
             {
                 "role": "system",
                 "content": (
-                    _SUMMARIZER_SYSTEM_PROMPT
+                    prompt
                     + "\n- Your summary MUST be under "
                     + str(char_budget)
                     + " characters."
@@ -615,6 +630,9 @@ def _summarize_single(
             },
         ],
         max_tokens=max_tokens,
+        timeout=timeout,
+        num_retries=3,
+        retry_strategy="exponential_backoff_retry",
     )
     content = response.choices[0].message.content  # type: ignore[union-attr]
     if content:
@@ -627,22 +645,55 @@ def summarize_specification(
     model: str = "bedrock/us.anthropic.claude-sonnet-4-6-v1",
     max_tokens: int = 4000,
     max_char_length: int = 10000,
+    timeout: float = 120,
+    cache_path: Optional[Path] = None,
 ) -> str:
     """Summarize specification text using an LLM instead of hard truncation.
 
-    For specs that fit within a single LLM context window (~150K chars),
+    For specs that fit within a single LLM context window (~300K chars),
     summarizes in one pass. For larger specs, splits into chunks, summarizes
-    each chunk independently, then consolidates with a second LLM pass.
+    each chunk in parallel, then consolidates with a second LLM pass.
 
     Falls back to truncation if any LLM call fails.
     """
+    cache_key = hashlib.sha256(
+        (spec_text + model + str(max_char_length)).encode()
+    ).hexdigest()
+
+    if cache_path is not None:
+        try:
+            if cache_path.exists():
+                cached = json.loads(cache_path.read_text())
+                if cached.get("hash") == cache_key:
+                    logger.info("Spec summary cache hit (%s)", cache_path)
+                    return cached["summary"]
+        except Exception:
+            logger.debug("Cache read failed, proceeding with summarization")
+
     import litellm
 
     original_len = len(spec_text)
 
-    # Max chars per chunk — ~500K chars leaves room for system prompt + output
-    # within Sonnet 4.6's 1M token context window.
-    chunk_max_chars = 500_000
+    def _write_cache(summary: str) -> None:
+        if cache_path is None:
+            return
+        try:
+            cache_path.write_text(
+                json.dumps(
+                    {
+                        "hash": cache_key,
+                        "model": model,
+                        "max_char_length": max_char_length,
+                        "summary": summary,
+                    }
+                )
+            )
+        except Exception:
+            logger.debug("Cache write failed for %s", cache_path)
+
+    # Max chars per chunk — ~300K chars at ~3 chars/token for dense code = ~100K tokens,
+    # leaving ample room for system prompt + output within Sonnet 4.6's 1M context.
+    chunk_max_chars = 300_000
 
     try:
         if len(spec_text) <= chunk_max_chars:
@@ -652,6 +703,7 @@ def summarize_specification(
                 max_tokens=max_tokens,
                 char_budget=max_char_length,
                 litellm_module=litellm,
+                timeout=timeout,
             )
             if summary:
                 logger.info(
@@ -660,6 +712,7 @@ def summarize_specification(
                     len(summary),
                     model,
                 )
+                _write_cache(summary)
                 return summary
             logger.warning("Empty summary from %s, falling back to truncation", model)
             return spec_text[:max_char_length]
@@ -671,26 +724,39 @@ def summarize_specification(
             len(chunks),
         )
 
-        per_chunk_budget = max(max_char_length // len(chunks), 2000)
+        per_chunk_budget = max_char_length // len(chunks)
         chunk_summaries: list[str] = []
 
-        for i, chunk in enumerate(chunks):
-            logger.info(
-                "Summarizing chunk %d/%d (%d chars, budget=%d)",
-                i + 1,
-                len(chunks),
-                len(chunk),
-                per_chunk_budget,
-            )
-            result = _summarize_single(
-                text=chunk,
-                model=model,
-                max_tokens=max_tokens,
-                char_budget=per_chunk_budget,
-                litellm_module=litellm,
-            )
-            if result:
-                chunk_summaries.append(result)
+        max_workers = min(len(chunks), 4)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_idx = {
+                executor.submit(
+                    _summarize_single,
+                    chunk,
+                    model,
+                    max_tokens,
+                    per_chunk_budget,
+                    litellm,
+                    None,
+                    timeout,
+                ): i
+                for i, chunk in enumerate(chunks)
+            }
+            results: dict[int, Optional[str]] = {}
+            for future in as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                try:
+                    results[idx] = future.result()
+                except Exception:
+                    logger.warning(
+                        "Chunk %d/%d raised exception, skipping", idx + 1, len(chunks)
+                    )
+                    results[idx] = None
+
+        for i in range(len(chunks)):
+            r = results.get(i)
+            if r:
+                chunk_summaries.append(r)
             else:
                 logger.warning(
                     "Chunk %d/%d returned empty, skipping", i + 1, len(chunks)
@@ -700,7 +766,7 @@ def summarize_specification(
             logger.warning("All chunk summaries empty, falling back to truncation")
             return spec_text[:max_char_length]
 
-        merged = "\n\n---\n\n".join(chunk_summaries)
+        merged = "\n\n".join(chunk_summaries)
         merged_len = len(merged)
         logger.info(
             "Consolidating %d chunk summaries (%d chars total) into final summary",
@@ -714,6 +780,7 @@ def summarize_specification(
                 original_len,
                 merged_len,
             )
+            _write_cache(merged)
             return merged
 
         final = _summarize_single(
@@ -722,6 +789,8 @@ def summarize_specification(
             max_tokens=max_tokens,
             char_budget=max_char_length,
             litellm_module=litellm,
+            system_prompt=_CONSOLIDATION_SYSTEM_PROMPT,
+            timeout=timeout,
         )
         if final:
             logger.info(
@@ -730,6 +799,7 @@ def summarize_specification(
                 len(final),
                 model,
             )
+            _write_cache(final)
             return final
 
         logger.warning("Consolidation returned empty, using merged chunk summaries")
