@@ -431,21 +431,22 @@ class AiderAgents(Agents):
         elif lint_first:
             coder.commands.cmd_lint(fnames=fnames)
         else:
-            max_input = self.model.info.get("max_input_tokens", 0)
-            if max_input > 0:
-                estimated_tokens = len(message) // 4
-                if estimated_tokens > max_input:
-                    logger = logging.getLogger(__name__)
-                    logger.warning(
-                        f"Skipping: message ~{estimated_tokens} tokens exceeds "
-                        f"max_input_tokens {max_input} for {fnames}"
-                    )
-                    sys.stdout.close()
-                    sys.stderr.close()
-                    sys.stdout = sys.__stdout__
-                    sys.stderr = sys.__stderr__
-                    return AiderReturn(log_file)
             coder.run(message)
+            # max_input = self.model.info.get("max_input_tokens", 0)
+            # if max_input > 0:
+            #     estimated_tokens = len(message) // 4
+            #     if estimated_tokens > max_input:
+            #         logger = logging.getLogger(__name__)
+            #         logger.warning(
+            #             f"Skipping: message ~{estimated_tokens} tokens exceeds "
+            #             f"max_input_tokens {max_input} for {fnames}"
+            #         )
+            #         sys.stdout.close()
+            #         sys.stderr.close()
+            #         sys.stdout = sys.__stdout__
+            #         sys.stderr = sys.__stderr__
+            #         return AiderReturn(log_file)
+            
 
         # Close redirected stdout and stderr
         sys.stdout.close()

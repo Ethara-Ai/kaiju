@@ -686,6 +686,8 @@ use_unit_tests_info: ${use_unit_tests_info}
 max_unit_tests_info_length: 10000
 use_spec_info: ${use_spec_info}
 max_spec_info_length: 10000
+spec_summary_model: 'bedrock/us.anthropic.claude-sonnet-4-6-v1'
+spec_summary_max_tokens: 4000
 use_lint_info: ${use_lint_info}
 max_lint_info_length: 10000
 run_entire_dir_lint: ${run_entire_dir_lint}

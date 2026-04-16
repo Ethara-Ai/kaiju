@@ -1,18 +1,21 @@
 import ast
 import bz2
 import git
+import logging
 import os
 import re
 import sys
 from dataclasses import asdict
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 import fitz
 from import_deps import ModuleSet
 from graphlib import TopologicalSorter, CycleError
 import yaml
 
 from agent.class_types import AgentConfig
+
+logger = logging.getLogger(__name__)
 
 PROMPT_HEADER = ">>> Here is the Task:\n"
 REFERENCE_HEADER = "\n\n>>> Here is the Reference for you to finish the task:\n"
@@ -452,18 +455,22 @@ def get_message(
     if agent_config.use_spec_info:
         spec_pdf_path = Path(repo_path) / "spec.pdf"
         spec_bz2_path = Path(repo_path) / "spec.pdf.bz2"
-        # Decompress spec.pdf.bz2 → spec.pdf if needed
         if spec_bz2_path.exists() and not spec_pdf_path.exists():
             with bz2.open(str(spec_bz2_path), "rb") as in_file:
                 with open(str(spec_pdf_path), "wb") as out_file:
                     out_file.write(in_file.read())
         if spec_pdf_path.exists():
-            spec_info = (
-                f"\n{SPEC_INFO_HEADER} "
-                + get_specification(specification_pdf_path=spec_pdf_path)[
-                    : agent_config.max_spec_info_length
-                ]
-            )
+            raw_spec = get_specification(specification_pdf_path=spec_pdf_path)
+            if len(raw_spec) > agent_config.max_spec_info_length:
+                processed_spec = summarize_specification(
+                    spec_text=raw_spec,
+                    model=agent_config.spec_summary_model,
+                    max_tokens=agent_config.spec_summary_max_tokens,
+                    max_char_length=agent_config.max_spec_info_length,
+                )
+            else:
+                processed_spec = raw_spec
+            spec_info = f"\n{SPEC_INFO_HEADER} " + processed_spec
         else:
             spec_info = ""
     else:
@@ -501,6 +508,195 @@ def get_specification(specification_pdf_path: Path) -> str:
         text += page.get_text()  # type: ignore
 
     return text
+
+
+def _chunk_text(text: str, chunk_size: int) -> list:
+    """Split text into chunks of approximately chunk_size characters.
+
+    Tries to break at newline boundaries to avoid splitting mid-sentence.
+    """
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = start + chunk_size
+        if end >= len(text):
+            chunks.append(text[start:])
+            break
+        # Try to break at a newline within the last 20% of the chunk
+        search_start = end - chunk_size // 5
+        newline_pos = text.rfind("\n", search_start, end)
+        if newline_pos > start:
+            end = newline_pos + 1
+        chunks.append(text[start:end])
+        start = end
+    return chunks
+
+
+_SUMMARIZER_SYSTEM_PROMPT = (
+    "You are a technical documentation summarizer for an AI coding "
+    "agent that must implement a Python library from its specification. "
+    "Your summary will be the ONLY reference the agent receives.\n\n"
+    "Rules:\n"
+    "- Preserve ALL: API signatures, function/class/method names, "
+    "parameter types, return types, behavioral contracts, edge cases, "
+    "module structure, dependencies, constants, enums, config values.\n"
+    "- Omit: introductions, installation instructions, changelog, "
+    "marketing text, contributor guidelines, verbose prose.\n"
+    "- Be maximally dense. Use terse notation over full sentences."
+)
+
+
+def _summarize_single(
+    text: str,
+    model: str,
+    max_tokens: int,
+    char_budget: int,
+    litellm_module: object,
+) -> Optional[str]:
+    """Call LLM to summarize a single piece of text. Returns None on failure."""
+    response = litellm_module.completion(  # type: ignore[union-attr]
+        model=model,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    _SUMMARIZER_SYSTEM_PROMPT
+                    + "\n- Your summary MUST be under "
+                    + str(char_budget)
+                    + " characters."
+                ),
+            },
+            {
+                "role": "user",
+                "content": "Summarize this specification:\n\n" + text,
+            },
+        ],
+        max_tokens=max_tokens,
+    )
+    content = response.choices[0].message.content  # type: ignore[union-attr]
+    if content:
+        return content.strip()
+    return None
+
+
+def summarize_specification(
+    spec_text: str,
+    model: str = "bedrock/us.anthropic.claude-sonnet-4-6-v1",
+    max_tokens: int = 4000,
+    max_char_length: int = 10000,
+) -> str:
+    """Summarize specification text using an LLM instead of hard truncation.
+
+    For specs that fit within a single LLM context window (~150K chars),
+    summarizes in one pass. For larger specs, splits into chunks, summarizes
+    each chunk independently, then consolidates with a second LLM pass.
+
+    Falls back to truncation if any LLM call fails.
+    """
+    import litellm
+
+    original_len = len(spec_text)
+
+    # Max chars per chunk — ~500K chars leaves room for system prompt + output
+    # within Sonnet 4.6's 1M token context window.
+    chunk_max_chars = 500_000
+
+    try:
+        if len(spec_text) <= chunk_max_chars:
+            summary = _summarize_single(
+                text=spec_text,
+                model=model,
+                max_tokens=max_tokens,
+                char_budget=max_char_length,
+                litellm_module=litellm,
+            )
+            if summary:
+                logger.info(
+                    "Spec summarized (single-pass): %d chars -> %d chars (model=%s)",
+                    original_len,
+                    len(summary),
+                    model,
+                )
+                return summary
+            logger.warning("Empty summary from %s, falling back to truncation", model)
+            return spec_text[:max_char_length]
+
+        chunks = _chunk_text(spec_text, chunk_max_chars)
+        logger.info(
+            "Spec too large for single pass (%d chars), splitting into %d chunks",
+            original_len,
+            len(chunks),
+        )
+
+        per_chunk_budget = max(max_char_length // len(chunks), 2000)
+        chunk_summaries: list[str] = []
+
+        for i, chunk in enumerate(chunks):
+            logger.info(
+                "Summarizing chunk %d/%d (%d chars, budget=%d)",
+                i + 1,
+                len(chunks),
+                len(chunk),
+                per_chunk_budget,
+            )
+            result = _summarize_single(
+                text=chunk,
+                model=model,
+                max_tokens=max_tokens,
+                char_budget=per_chunk_budget,
+                litellm_module=litellm,
+            )
+            if result:
+                chunk_summaries.append(result)
+            else:
+                logger.warning(
+                    "Chunk %d/%d returned empty, skipping", i + 1, len(chunks)
+                )
+
+        if not chunk_summaries:
+            logger.warning("All chunk summaries empty, falling back to truncation")
+            return spec_text[:max_char_length]
+
+        merged = "\n\n---\n\n".join(chunk_summaries)
+        merged_len = len(merged)
+        logger.info(
+            "Consolidating %d chunk summaries (%d chars total) into final summary",
+            len(chunk_summaries),
+            merged_len,
+        )
+
+        if merged_len <= max_char_length:
+            logger.info(
+                "Spec summarized (chunked, no consolidation needed): %d chars -> %d chars",
+                original_len,
+                merged_len,
+            )
+            return merged
+
+        final = _summarize_single(
+            text=merged,
+            model=model,
+            max_tokens=max_tokens,
+            char_budget=max_char_length,
+            litellm_module=litellm,
+        )
+        if final:
+            logger.info(
+                "Spec summarized (chunked+consolidated): %d chars -> %d chars (model=%s)",
+                original_len,
+                len(final),
+                model,
+            )
+            return final
+
+        logger.warning("Consolidation returned empty, using merged chunk summaries")
+        return merged
+
+    except Exception as e:
+        logger.warning(
+            "Spec summarization failed (%s), falling back to truncation: %s", model, e
+        )
+        return spec_text[:max_char_length]
 
 
 def create_branch(repo: git.Repo, branch: str, from_commit: str) -> None:
