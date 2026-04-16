@@ -20,7 +20,10 @@ class RepoInstance(BaseModel):
     src_dir: str
 
     def __getitem__(self, item: str):
-        return getattr(self, item)
+        try:
+            return getattr(self, item)
+        except AttributeError:
+            raise KeyError(item) from None
 
     def keys(self) -> KeysView[str]:
         """Return the field names of the model as dictionary keys."""
@@ -34,7 +37,10 @@ class SimpleInstance(BaseModel):
     test: str
 
     def __getitem__(self, item: str):
-        return getattr(self, item)
+        try:
+            return getattr(self, item)
+        except AttributeError:
+            raise KeyError(item) from None
 
     def keys(self) -> KeysView[str]:
         """Return the field names of the model as dictionary keys."""

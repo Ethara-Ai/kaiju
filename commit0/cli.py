@@ -91,14 +91,51 @@ def write_commit0_config_file(dot_file_path: str, config: dict) -> None:
         yaml.dump(config, f, default_flow_style=False)
 
 
+_COMMIT0_REQUIRED_KEYS = {
+    "dataset_name": str,
+    "dataset_split": str,
+    "repo_split": str,
+    "base_dir": str,
+}
+
+
+def validate_commit0_config(config: dict, config_path: str) -> None:
+    """Validate .commit0.yaml has all required keys with correct types."""
+    missing = [k for k in _COMMIT0_REQUIRED_KEYS if k not in config]
+    if missing:
+        raise ValueError(
+            f"Config file '{config_path}' is missing required keys: {missing}. "
+            f"Required: {list(_COMMIT0_REQUIRED_KEYS.keys())}"
+        )
+    for key, expected_type in _COMMIT0_REQUIRED_KEYS.items():
+        if not isinstance(config[key], expected_type):
+            raise TypeError(
+                f"Config key '{key}' in '{config_path}' must be {expected_type.__name__}, "
+                f"got {type(config[key]).__name__}: {config[key]!r}"
+            )
+    base_dir = config["base_dir"]
+    if not os.path.isdir(base_dir):
+        raise FileNotFoundError(
+            f"base_dir '{base_dir}' from '{config_path}' does not exist. "
+            f"Run 'commit0 setup' first."
+        )
+
+
 def read_commit0_config_file(dot_file_path: str) -> dict:
-    # Check if the file exists before attempting to read it
+    """Read and validate .commit0.yaml config file."""
     if not os.path.exists(dot_file_path):
         raise FileNotFoundError(
             f"The commit0 dot file '{dot_file_path}' does not exist."
         )
     with open(dot_file_path, "r") as f:
-        return yaml.load(f, Loader=yaml.FullLoader)
+        data = yaml.safe_load(f)
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"Config file '{dot_file_path}' is empty or invalid. "
+            f"Expected a YAML mapping, got {type(data).__name__}."
+        )
+    validate_commit0_config(data, dot_file_path)
+    return data
 
 
 @commit0_app.command()

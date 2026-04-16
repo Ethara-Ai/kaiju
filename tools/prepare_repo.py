@@ -799,6 +799,11 @@ def prepare_repos(
 ) -> list[dict]:
     """Prepare repos for the dataset."""
     token = os.environ.get("GITHUB_TOKEN")
+    if not token:
+        raise EnvironmentError(
+            "GITHUB_TOKEN is required but not set. "
+            "Export GITHUB_TOKEN before running prepare_repos."
+        )
     entries: list[dict] = []
 
     _get_scrape_func()

@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 
 
+# SCHEMA CONTRACT: New fields MUST have defaults to maintain backward
+# compatibility with existing .agent.yaml files.
 @dataclass
 class AgentConfig:
     agent_name: str
@@ -28,3 +30,28 @@ class AgentConfig:
     capture_thinking: bool = False  # Whether to capture reasoning tokens
     trajectory_md: bool = True  # Whether to write trajectory.md
     output_jsonl: bool = False  # Whether to write output.jsonl
+
+    def __post_init__(self):
+        if not isinstance(self.model_name, str) or not self.model_name.strip():
+            raise ValueError(
+                f"model_name must be a non-empty string, got: {self.model_name!r}"
+            )
+        if not isinstance(self.agent_name, str) or not self.agent_name.strip():
+            raise ValueError(
+                f"agent_name must be a non-empty string, got: {self.agent_name!r}"
+            )
+        if not isinstance(self.max_iteration, int) or self.max_iteration < 1:
+            raise ValueError(
+                f"max_iteration must be a positive integer, got: {self.max_iteration!r}"
+            )
+        for field_name in (
+            "max_repo_info_length",
+            "max_unit_tests_info_length",
+            "max_spec_info_length",
+            "max_lint_info_length",
+        ):
+            val = getattr(self, field_name)
+            if not isinstance(val, int) or val < 0:
+                raise ValueError(
+                    f"{field_name} must be a non-negative integer, got: {val!r}"
+                )

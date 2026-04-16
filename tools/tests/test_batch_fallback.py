@@ -75,6 +75,11 @@ def _run_prepare(
 
     from tools.batch_prepare import prepare_single_repo
 
+    patches[f"{MODULE}.os.environ.get"] = MagicMock(
+        side_effect=lambda k, *a: (
+            "fake-token" if k in ("GITHUB_TOKEN", "GH_TOKEN") else None
+        )
+    )
     stack = [patch(target, mock_obj) for target, mock_obj in patches.items()]
     for p in stack:
         p.start()

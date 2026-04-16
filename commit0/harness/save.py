@@ -26,6 +26,11 @@ def main(
     if github_token is None:
         # Get GitHub token from environment variable if not provided
         github_token = os.environ.get("GITHUB_TOKEN")
+    if not github_token:
+        raise EnvironmentError(
+            "GITHUB_TOKEN is required but not set. "
+            "Set it via --github-token flag or GITHUB_TOKEN environment variable."
+        )
     dataset: Iterator[RepoInstance] = load_dataset_from_config(
         dataset_name, split=dataset_split
     )  # type: ignore

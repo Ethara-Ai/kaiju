@@ -302,6 +302,11 @@ def main() -> None:
         import os
 
         token = args.hf_token or os.environ.get("HF_TOKEN")
+        if not token:
+            raise EnvironmentError(
+                "HF_TOKEN is required for upload but not set. "
+                "Pass --hf-token or export HF_TOKEN."
+            )
         upload_to_huggingface(hf_entries, args.hf_repo, token=token)
 
 

@@ -9,7 +9,7 @@ from agent.agent_utils import (
     get_changed_files_from_commits,
     update_message_with_dependencies,
     get_lint_cmd,
-    read_yaml_config,
+    load_agent_config,
 )
 import json
 import subprocess
@@ -279,9 +279,7 @@ def run_agent(
     display_repo_progress_num: int,
 ) -> None:
     """Main function to run Aider for a given repository."""
-    config = read_yaml_config(agent_config_file)
-
-    agent_config = AgentConfig(**config)
+    agent_config = load_agent_config(agent_config_file)
 
     commit0_config_file = os.path.abspath(commit0_config_file)
     commit0_config = read_commit0_config_file(commit0_config_file)

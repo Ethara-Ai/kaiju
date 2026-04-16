@@ -159,6 +159,11 @@ def prepare_single_repo(
     )
 
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if not token:
+        raise EnvironmentError(
+            "GITHUB_TOKEN (or GH_TOKEN) is required but not set. "
+            "Export GITHUB_TOKEN before running batch_prepare."
+        )
     repo_name = full_name.split("/")[-1]
 
     # 1. Fork

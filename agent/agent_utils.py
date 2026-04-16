@@ -647,4 +647,37 @@ def read_yaml_config(config_file: str) -> dict:
     if not os.path.exists(config_file):
         raise FileNotFoundError(f"The config file '{config_file}' does not exist.")
     with open(config_file, "r") as f:
-        return yaml.load(f, Loader=yaml.FullLoader)
+        data = yaml.safe_load(f)
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"Config file '{config_file}' is empty or invalid. "
+            f"Expected a YAML mapping, got {type(data).__name__}."
+        )
+    return data
+
+
+def load_agent_config(config_file: str) -> "AgentConfig":
+    """Load and validate agent config from YAML file into AgentConfig."""
+    import dataclasses
+    from agent.class_types import AgentConfig
+
+    config = read_yaml_config(config_file)
+
+    valid_fields = {f.name for f in dataclasses.fields(AgentConfig)}
+    unknown = set(config.keys()) - valid_fields
+    if unknown:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "Unknown keys in '%s' will be ignored: %s", config_file, sorted(unknown)
+        )
+
+    filtered = {k: v for k, v in config.items() if k in valid_fields}
+
+    try:
+        return AgentConfig(**filtered)
+    except TypeError as e:
+        raise TypeError(
+            f"Failed to create AgentConfig from '{config_file}': {e}. "
+            f"Required fields: {sorted(f.name for f in dataclasses.fields(AgentConfig) if f.default is dataclasses.MISSING and f.default_factory is dataclasses.MISSING)}"
+        ) from e
