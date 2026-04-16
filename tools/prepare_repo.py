@@ -472,13 +472,33 @@ def quick_import_check(repo_dir: Path, src_dir: str) -> tuple[bool, str]:
 # ─── Setup/Test Dict Generation ──────────────────────────────────────────────
 
 
-def extract_test_dependencies(repo_dir: Path) -> list[str]:
-    """Extract test dependencies from project config files."""
-    base_deps = {"pytest", "pytest-json-report"}
-    found_deps: dict[str, str] = {}
-    for dep in base_deps:
-        found_deps[dep] = dep
+def _parse_dep_name(dep_str: str) -> str:
+    """Extract package name from a PEP 508 dependency string."""
+    return re.split(r"[><=!~;\s\[]", dep_str.strip())[0].strip().lower()
 
+
+def _add_dep(deps: dict[str, str], raw: str) -> None:
+    """Add a dependency to *deps*, keyed by normalized name, preserving the full spec."""
+    name = _parse_dep_name(raw)
+    if name:
+        deps.setdefault(name, raw.strip())
+
+
+def extract_all_dependencies(repo_dir: Path) -> tuple[list[str], list[str]]:
+    """Extract both runtime and test dependencies from all config formats.
+
+    Reads pyproject.toml, setup.cfg, setup.py, and requirements*.txt.
+
+    Returns:
+        (runtime_deps, test_deps) — each is a sorted list of full dependency
+        strings (preserving version pins, extras, and markers).  Sorting uses
+        the normalized package name as key.
+    """
+    runtime: dict[str, str] = {}
+    test: dict[str, str] = {
+        "pytest": "pytest",
+        "pytest-json-report": "pytest-json-report",
+    }
     test_group_names = {"test", "testing", "tests", "dev"}
 
     pyproject = repo_dir / "pyproject.toml"
@@ -489,46 +509,109 @@ def extract_test_dependencies(repo_dir: Path) -> list[str]:
             with open(pyproject, "rb") as f:
                 data = tomllib.load(f)
 
+            for dep in data.get("project", {}).get("dependencies", []):
+                _add_dep(runtime, dep)
+
             optional_deps = data.get("project", {}).get("optional-dependencies", {})
             for group_name in test_group_names:
                 for dep_str in optional_deps.get(group_name, []):
-                    name = re.split(r"[><=!~;\s\[]", dep_str.strip())[0].strip()
-                    if name and name.lower() not in found_deps:
-                        found_deps[name.lower()] = dep_str.strip()
+                    _add_dep(test, dep_str)
 
             dep_groups = data.get("dependency-groups", {})
             for group_name in test_group_names:
                 for dep_entry in dep_groups.get(group_name, []):
                     if isinstance(dep_entry, str):
-                        name = re.split(r"[><=!~;\s\[]", dep_entry.strip())[0].strip()
-                        if name and name.lower() not in found_deps:
-                            found_deps[name.lower()] = dep_entry.strip()
+                        _add_dep(test, dep_entry)
         except Exception as e:
             logger.debug("  Could not parse pyproject.toml for deps: %s", e)
 
-    for req_filename in [
+    setup_cfg = repo_dir / "setup.cfg"
+    if setup_cfg.exists():
+        try:
+            import configparser
+
+            cfg = configparser.ConfigParser()
+            cfg.read(setup_cfg, encoding="utf-8")
+
+            if cfg.has_option("options", "install_requires"):
+                for line in cfg.get("options", "install_requires").strip().splitlines():
+                    _add_dep(runtime, line)
+
+            if cfg.has_section("options.extras_require"):
+                for group_name in test_group_names:
+                    if cfg.has_option("options.extras_require", group_name):
+                        for line in (
+                            cfg.get("options.extras_require", group_name)
+                            .strip()
+                            .splitlines()
+                        ):
+                            _add_dep(test, line)
+        except Exception as e:
+            logger.debug("  Could not parse setup.cfg for deps: %s", e)
+
+    setup_py = repo_dir / "setup.py"
+    if setup_py.exists():
+        try:
+            content = setup_py.read_text(errors="replace")
+            m = re.search(r"install_requires\s*=\s*\[(.*?)\]", content, re.DOTALL)
+            if m:
+                for dep_match in re.findall(r"""['"]([^'"]+)['"]""", m.group(1)):
+                    _add_dep(runtime, dep_match)
+
+            m = re.search(r"tests_require\s*=\s*\[(.*?)\]", content, re.DOTALL)
+            if m:
+                for dep_match in re.findall(r"""['"]([^'"]+)['"]""", m.group(1)):
+                    _add_dep(test, dep_match)
+        except Exception as e:
+            logger.debug("  Could not parse setup.py for deps: %s", e)
+
+    req_runtime_files = ["requirements.txt"]
+    req_test_files = [
         "requirements-test.txt",
         "requirements-tests.txt",
         "requirements-dev.txt",
-    ]:
-        req_file = repo_dir / req_filename
-        if req_file.exists():
-            try:
-                for line in req_file.read_text(errors="replace").splitlines():
-                    line = line.strip()
-                    if not line or line.startswith("#") or line.startswith("-"):
-                        continue
-                    name = re.split(r"[><=!~;\s\[]", line)[0].strip()
-                    if name and name.lower() not in found_deps:
-                        found_deps[name.lower()] = line
-            except Exception:
-                pass
+        "requirements_test.txt",
+        "requirements_dev.txt",
+    ]
+    for filename in req_runtime_files:
+        _read_requirements_file(repo_dir / filename, runtime)
+    for filename in req_test_files:
+        _read_requirements_file(repo_dir / filename, test)
 
-    for dep in base_deps:
-        if dep not in found_deps:
-            found_deps[dep] = dep
+    return (
+        sorted(runtime.values(), key=lambda s: _parse_dep_name(s).lower()),
+        sorted(test.values(), key=lambda s: _parse_dep_name(s).lower()),
+    )
 
-    return sorted(found_deps.values(), key=lambda s: s.lower())
+
+def _read_requirements_file(req_file: Path, target: dict[str, str]) -> None:
+    """Read a requirements.txt-style file and add full dep specs to *target*."""
+    if not req_file.exists():
+        return
+    try:
+        for line in req_file.read_text(errors="replace").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or line.startswith("-"):
+                continue
+            _add_dep(target, line)
+    except Exception:
+        pass
+
+
+def extract_test_dependencies(repo_dir: Path) -> list[str]:
+    """Extract test dependencies from project config files.
+
+    Backward-compatible wrapper around :func:`extract_all_dependencies`.
+    Returns the union of runtime and test deps as a single sorted list
+    of full dependency strings (with version pins preserved).
+    """
+    runtime_deps, test_deps = extract_all_dependencies(repo_dir)
+    merged: dict[str, str] = {}
+    for spec in runtime_deps + test_deps:
+        name = _parse_dep_name(spec)
+        if name:
+            merged.setdefault(name, spec)
+    return sorted(merged.values(), key=lambda s: _parse_dep_name(s).lower())
 
 
 def generate_setup_dict(repo_dir: Path, full_name: str) -> dict:
@@ -597,17 +680,12 @@ def generate_setup_dict(repo_dir: Path, full_name: str) -> dict:
             setup["install"] = " && ".join(f"pip install -r {f}" for f in req_files)
         setup["pip_packages"] = extract_test_dependencies(repo_dir)
 
-    # Check for system deps (common patterns)
+    from commit0.harness.dockerfiles import detect_system_dependencies
+
+    apt_pkgs = detect_system_dependencies(setup.get("pip_packages", []))
     pre_install = []
-    if pyproject.exists():
-        content = pyproject.read_text(errors="replace")
-        # Common C-extension deps
-        if any(pkg in content for pkg in ["cython", "numpy", "scipy"]):
-            pre_install.append("apt-get update && apt-get install -y build-essential")
-        if "lxml" in content:
-            pre_install.append(
-                "apt-get update && apt-get install -y libxml2-dev libxslt1-dev"
-            )
+    if apt_pkgs:
+        pre_install.append(f"apt-get install -y {' '.join(apt_pkgs)}")
     setup["pre_install"] = pre_install
 
     # Documentation URL

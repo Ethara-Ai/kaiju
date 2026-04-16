@@ -6,6 +6,7 @@ from typing import Iterator, Union
 
 from commit0.harness.constants import RepoInstance, SimpleInstance, SPLIT
 from commit0.harness.docker_build import build_repo_images
+from commit0.harness.health_check import run_health_checks
 from commit0.harness.spec import make_spec
 from commit0.harness.utils import load_dataset_from_config
 
@@ -57,11 +58,35 @@ def main(
     successful, failed = build_repo_images(
         client, specs, dataset_type, num_workers, verbose
     )
-    if failed:
+
+    health_failures: list[str] = []
+    for spec in specs:
+        image_key = spec.repo_image_key
+        if image_key in failed:
+            continue
+        setup = spec._get_setup_dict()
+        pip_packages = setup.get("pip_packages", [])
+        python_version = setup.get("python")
+        results = run_health_checks(
+            client, image_key, pip_packages=pip_packages, python_version=python_version
+        )
+        for passed, check_name, detail in results:
+            if not passed:
+                logger.error(
+                    "Health check FAILED [%s] for %s: %s", check_name, image_key, detail
+                )
+                health_failures.append(image_key)
+            else:
+                logger.info(
+                    "Health check passed [%s] for %s: %s", check_name, image_key, detail
+                )
+
+    all_failed = list(failed) + health_failures
+    if all_failed:
         logger.error(
-            "Failed to build %d image(s): %s",
-            len(failed),
-            failed,
+            "Failed to build or verify %d image(s): %s",
+            len(all_failed),
+            all_failed,
         )
         sys.exit(1)
 

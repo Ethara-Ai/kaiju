@@ -25,6 +25,8 @@ import json
 import logging
 from pathlib import Path
 
+from commit0.harness.constants import SUPPORTED_PYTHON_VERSIONS
+
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -83,6 +85,14 @@ def validate_entry(entry: dict, index: int) -> list[str]:
         issues.append(
             f"[{index}] reference_commit too short: {entry.get('reference_commit', '')}"
         )
+
+    if "setup" in entry and isinstance(entry["setup"], dict):
+        py_version = entry["setup"].get("python")
+        if py_version and py_version not in SUPPORTED_PYTHON_VERSIONS:
+            issues.append(
+                f"[{index}] Unsupported Python version '{py_version}'. "
+                f"Supported: {sorted(SUPPORTED_PYTHON_VERSIONS)}"
+            )
 
     return issues
 

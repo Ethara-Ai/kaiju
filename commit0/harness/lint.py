@@ -1,3 +1,4 @@
+import logging
 import shutil
 import subprocess
 import sys
@@ -10,8 +11,9 @@ from commit0.harness.constants import (
 )
 from commit0.harness.utils import load_dataset_from_config
 
+logger = logging.getLogger(__name__)
 
-config = """repos:
+_CONFIG_FULL = """repos:
 - repo: https://github.com/pre-commit/pre-commit-hooks
   rev: v4.3.0
   hooks:
@@ -29,6 +31,35 @@ config = """repos:
   rev: v1.1.376
   hooks:
     - id: pyright"""
+
+_CONFIG_NO_PYRIGHT = """repos:
+- repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: v4.3.0
+  hooks:
+  - id: check-case-conflict
+  - id: mixed-line-ending
+
+- repo: https://github.com/astral-sh/ruff-pre-commit
+  rev: v0.6.1
+  hooks:
+    - id: ruff
+      args: [ --fix ]
+    - id: ruff-format
+"""
+
+
+def _check_pyright_available() -> bool:
+    """Check if pyright's Node.js binary can execute on this host."""
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "pyright", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
+        return False
 
 
 def main(
@@ -71,8 +102,14 @@ def main(
                     files.append(Path(os.path.join(root, file)))
 
     config_file = Path(".commit0.pre-commit-config.yaml")
-    if not config_file.is_file():
-        config_file.write_text(config)
+    pyright_ok = _check_pyright_available()
+    if not pyright_ok:
+        logger.warning(
+            "pyright is not available on this host (likely missing libatomic1). "
+            "Skipping pyright hook — only ruff checks will run. "
+            "Fix: sudo apt-get install -y libatomic1"
+        )
+    config_file.write_text(_CONFIG_FULL if pyright_ok else _CONFIG_NO_PYRIGHT)
     # Find pre-commit executable: prefer venv, then PATH
     pre_commit_bin = os.path.join(os.path.dirname(sys.executable), "pre-commit")
     if not os.path.isfile(pre_commit_bin):
@@ -85,12 +122,39 @@ def main(
     command = [pre_commit_bin, "run", "--config", str(config_file), "--files"] + [
         str(f) for f in files
     ]
+
+    known_deps: set[str] = set()
+    if example is not None:
+        setup = (
+            example.get("setup", {})
+            if isinstance(example, dict)
+            else getattr(example, "setup", {})
+        )
+        if isinstance(setup, dict):
+            known_deps = {
+                p.lower()
+                .split("[")[0]
+                .split(">")[0]
+                .split("<")[0]
+                .split("=")[0]
+                .strip()
+                for p in setup.get("pip_packages", [])
+            }
+    project_package = (repo_name or "").replace("-", "_").lower()
+
+    from commit0.harness.lint_filter import filter_lint_output
+
     try:
         result = subprocess.run(command, capture_output=True, text=True, check=True)
-        print(result.stdout)
+        lint_result = filter_lint_output(result.stdout, project_package, known_deps)
+        print(lint_result.output)
         sys.exit(result.returncode)
     except subprocess.CalledProcessError as e:
-        print(e.output)
+        raw = e.output or ""
+        lint_result = filter_lint_output(raw, project_package, known_deps)
+        print(lint_result.output)
+        if lint_result.code_error_count == 0 and lint_result.suppressed_count > 0:
+            sys.exit(0)
         sys.exit(e.returncode)
     except FileNotFoundError as e:
         raise FileNotFoundError(f"Error running pre-commit: {e}") from e
