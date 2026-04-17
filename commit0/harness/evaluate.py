@@ -192,6 +192,15 @@ def main(
                 repo_name = futures[future]
                 try:
                     future.result()
+                except SystemExit as e:
+                    # run_pytest_ids.main() calls sys.exit(pytest_exit_code);
+                    # exit code 0-1 is normal (0=all passed, 1=some failed).
+                    if e.code not in (0, 1):
+                        logger.warning(
+                            "Evaluation for %s exited with code %s",
+                            repo_name,
+                            e.code,
+                        )
                 except Exception as e:
                     logger.error(
                         f"Evaluation failed for {repo_name}: {e}", exc_info=True

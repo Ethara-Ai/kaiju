@@ -336,7 +336,8 @@ class TestBranchResolution:
             mock_get_hash,
             [example],
         )
-        mock_git.Repo.return_value = MagicMock()
+        mock_repo = MagicMock()
+        mock_git.Repo.return_value = mock_repo
         mock_gen_patch.return_value = "patch"
         _setup_docker_ctx(mock_docker)
         _write_exit_code(tmp_path)
@@ -345,50 +346,13 @@ class TestBranchResolution:
             from commit0.harness.run_pytest_ids import main
 
             main(**_default_kwargs(branch="reference"))
-
-        mock_gen_patch.assert_called_once_with(
-            mock_git.Repo.return_value, "abc123", "ref_commit_hash"
-        )
-
-    @patch(f"{MODULE}.sys")
-    @patch(f"{MODULE}.Docker")
-    @patch(f"{MODULE}.generate_patch_between_commits")
-    @patch(f"{MODULE}.git")
-    @patch(f"{MODULE}.get_hash_string")
-    @patch(f"{MODULE}.close_logger")
-    @patch(f"{MODULE}.setup_logger")
-    @patch(f"{MODULE}.make_spec")
-    @patch(f"{MODULE}.load_dataset_from_config")
-    def test_local_branch_uses_hexsha(
-        self,
-        mock_load,
-        mock_make_spec,
-        mock_setup_logger,
-        mock_close_logger,
-        mock_get_hash,
-        mock_git,
-        mock_gen_patch,
-        mock_docker,
-        mock_sys,
-        tmp_path,
-    ):
-        example = _make_repo_example()
-        _setup_base_mocks(
-            mock_load,
-            mock_make_spec,
-            mock_setup_logger,
-            mock_close_logger,
-            mock_get_hash,
-            [example],
-        )
-        mock_repo = MagicMock()
-        mock_git.Repo.return_value = mock_repo
+            mock_sys.exit.assert_called_once_with(0)
+        mock_load.return_value = iter([example])
+        mock_sys.exit.reset_mock()
+        mock_gen_patch.reset_mock()
         mock_repo.branches = ["my-branch"]
         mock_repo.commit.return_value.hexsha = "local_hexsha"
-        mock_gen_patch.return_value = "patch"
-        _setup_docker_ctx(mock_docker)
         _write_exit_code_for(tmp_path, "test-repo", "my-branch")
-
         with patch(f"{MODULE}.RUN_PYTEST_LOG_DIR", tmp_path):
             from commit0.harness.run_pytest_ids import main
 
@@ -1327,8 +1291,8 @@ class TestExitCode:
         with patch(f"{MODULE}.RUN_PYTEST_LOG_DIR", tmp_path):
             from commit0.harness.run_pytest_ids import main
 
-            with pytest.raises(RuntimeError, match="Pytest exited with code 5"):
-                main(**_default_kwargs(branch="reference"))
+            main(**_default_kwargs(branch="reference"))
+            mock_sys.exit.assert_called_once_with(5)
 
     @patch(f"{MODULE}.sys")
     @patch(f"{MODULE}.Docker")

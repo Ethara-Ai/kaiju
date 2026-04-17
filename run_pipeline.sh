@@ -182,6 +182,16 @@ resolve_model() {
             MODEL_SHORT="gpt-5.4"
             CACHE_PROMPTS="false"
             ;;
+        nova-lite)
+            MODEL_NAME="bedrock/converse/arn:aws:bedrock:us-east-1:426628337772:application-inference-profile/cddwmu6axlfp"
+            MODEL_SHORT="nova-2-lite"
+            CACHE_PROMPTS="false"
+            ;;
+        nova-premier)
+            MODEL_NAME="bedrock/converse/arn:aws:bedrock:us-east-1:426628337772:application-inference-profile/td6kwwwp7q0e"
+            MODEL_SHORT="nova-premier"
+            CACHE_PROMPTS="false"
+            ;;
         *)
             MODEL_NAME="$arg"
             MODEL_SHORT=$(echo "$arg" | sed 's|.*/||' | tr -dc 'a-zA-Z0-9._-' | cut -c1-20)

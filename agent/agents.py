@@ -526,9 +526,15 @@ class AiderAgents(Agents):
             coder.max_reflections = self.max_iteration
             coder.stream = True
             coder.gpt_prompts.main_system += (
-                "\n\nNEVER edit test files. Test files are read-only reference material."
-                " If a test file is provided, use it only to understand expected behavior."
-                " Only modify implementation/source files to make the tests pass."
+                "\n\nNEVER edit test files. NEVER create new test files. Test files are"
+                " read-only reference material. If a test file is provided, use it ONLY"
+                " to understand expected behavior. Only modify implementation/source files"
+                " to make the tests pass."
+                "\n\nIMPORTANT: If you see low code coverage, it means the SOURCE code has"
+                " unimplemented functions (bodies with `pass` or `NotImplementedError`)."
+                " Fix coverage by IMPLEMENTING the source functions, NOT by writing new tests."
+                " The test suite is already complete — your job is to write the implementation"
+                " code that makes existing tests pass and raises coverage."
             )
 
             _test_summarizer_costs: list[SummarizerCost] = []
