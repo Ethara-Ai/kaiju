@@ -361,8 +361,17 @@ def run_agent(
             and example["repo"].split("/")[-1] in SPLIT[repo_split]
         ]
     else:
-        # Custom split not in SPLIT dict — include all entries from the dataset.
-        filtered_dataset = list(dataset)
+        filtered_dataset = [
+            example
+            for example in dataset
+            if isinstance(example, dict)
+            and "repo" in example
+            and isinstance(example["repo"], str)
+            and example["repo"].split("/")[-1].replace("-", "_")
+            == repo_split.replace("-", "_")
+        ]
+        if not filtered_dataset:
+            filtered_dataset = list(dataset)
     assert len(filtered_dataset) > 0, (
         f"No examples available for repo_split={repo_split!r}. "
         f"If using a custom dataset, ensure the JSON file is non-empty."

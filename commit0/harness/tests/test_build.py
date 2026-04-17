@@ -137,12 +137,19 @@ class TestSplitFiltering:
         assert m_spec.call_count == 1
         assert m_spec.call_args_list[0][0][0]["repo"] == "org/joblib"
 
-    def test_commit0_split_unknown_name_passes_through(self) -> None:
-        # split not in SPLIT → else:pass branch → example NOT filtered out
+    def test_commit0_split_unknown_name_filters_by_normalized_match(self) -> None:
         examples = [_repo_example("anyrepo")]
         custom_split = {"lite": ["other"]}
         _, m_spec, _, _, _ = _run_main(
             "my_dataset", examples, split="nonexistent_split", split_dict=custom_split
+        )
+        assert m_spec.call_count == 0
+
+    def test_commit0_split_unknown_name_matches_with_normalization(self) -> None:
+        examples = [_repo_example("my-repo")]
+        custom_split = {"lite": ["other"]}
+        _, m_spec, _, _, _ = _run_main(
+            "my_dataset", examples, split="my_repo", split_dict=custom_split
         )
         assert m_spec.call_count == 1
 

@@ -51,7 +51,52 @@ BEDROCK_REGION_MODEL_PRICING = {
         "supports_system_messages": True,
         "supports_vision": False,
     },
+    "amazon.nova-lite-v1:0": {
+        "input_cost_per_token": 6e-08,
+        "output_cost_per_token": 2.4e-07,
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
+        "mode": "chat",
+        "litellm_provider": "bedrock",
+        "supports_function_calling": True,
+        "supports_system_messages": True,
+        "supports_vision": True,
+    },
+    "amazon.nova-premier-v1:0": {
+        "input_cost_per_token": 2.5e-06,
+        "output_cost_per_token": 1e-05,
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 25000,
+        "max_tokens": 25000,
+        "mode": "chat",
+        "litellm_provider": "bedrock",
+        "supports_function_calling": True,
+        "supports_system_messages": True,
+        "supports_vision": True,
+    },
 }
+
+_ARN_PROFILE_TO_MODEL: dict[str, str] = {
+    "4w7tmk1iplxi": "anthropic.claude-opus-4-6-v1",
+    "8lzlkxguk85a": "zai.glm-5",
+    "5m69567zugvx": "moonshotai.kimi-k2.5",
+    "6oaav7wbxid4": "minimax.minimax-m2.5",
+    "cddwmu6axlfp": "amazon.nova-lite-v1:0",
+    "td6kwwwp7q0e": "amazon.nova-premier-v1:0",
+}
+
+
+def _resolve_model_id_from_static_map(model_name: str) -> str | None:
+    """Resolve ARN profile ID to underlying model ID using static map.
+
+    Falls back to this when boto3 get_inference_profile() is unavailable
+    (e.g., bearer token auth has no IAM permissions for the API call).
+    """
+    for profile_id, model_id in _ARN_PROFILE_TO_MODEL.items():
+        if profile_id in model_name:
+            return model_id
+    return None
 
 
 def register_bedrock_arn_pricing(model_name: str) -> None:
@@ -123,10 +168,33 @@ def register_bedrock_arn_pricing(model_name: str) -> None:
 
     except Exception:
         _logger.debug(
-            "Failed to register Bedrock ARN pricing for model %s",
+            "boto3 ARN resolution failed for %s, trying static map",
             model_name,
             exc_info=True,
         )
+
+    import litellm
+
+    if model_name in litellm.model_cost:
+        return
+
+    static_model_id = _resolve_model_id_from_static_map(model_name)
+    if static_model_id and static_model_id in BEDROCK_REGION_MODEL_PRICING:
+        litellm.model_cost[model_name] = BEDROCK_REGION_MODEL_PRICING[
+            static_model_id
+        ].copy()
+        litellm.model_cost[model_name]["litellm_provider"] = "bedrock"
+        _logger.debug(
+            "Matched pricing via static ARN map: %s → %s",
+            model_name,
+            static_model_id,
+        )
+        return
+
+    _logger.warning(
+        "Could not resolve pricing for model %s — costs will report as $0.00",
+        model_name,
+    )
 
 
 def handle_logging(logging_name: str, log_file: Path) -> None:

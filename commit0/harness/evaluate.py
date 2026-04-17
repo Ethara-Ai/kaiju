@@ -115,7 +115,9 @@ def main(
                     if repo_name not in SPLIT[repo_split]:
                         continue
                 else:
-                    if repo_name != repo_split:
+                    # Normalize: hyphens/underscores are interchangeable
+                    # (e.g., repo "scrapy-redis" must match repo_split "scrapy_redis")
+                    if repo_name.replace("-", "_") != repo_split.replace("-", "_"):
                         continue
         hashed_test_ids = get_hash_string(example["test"]["test_dir"])
         repo_branch = branch
@@ -163,7 +165,7 @@ def main(
                 f"Missing Docker images: {missing_images}. Run 'commit0 build' first."
             )
 
-    with tqdm(total=len(repos), smoothing=0, desc="Evaluating repos") as pbar:
+    with tqdm(total=len(triples), smoothing=0, desc="Evaluating repos") as pbar:
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
             # Create a future for running each instance
             futures = {

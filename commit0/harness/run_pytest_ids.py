@@ -261,7 +261,7 @@ def main(
         pytest_exit_code = int(
             Path(log_dir / "pytest_exit_code.txt").read_text().strip()
         )
-        if pytest_exit_code != 0:
+        if pytest_exit_code not in (0, 1):
             raise RuntimeError(f"Pytest exited with code {pytest_exit_code}")
     except EvaluationError as e:
         error_msg = (

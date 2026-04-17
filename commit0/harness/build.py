@@ -47,7 +47,8 @@ def main(
                     if repo_name not in SPLIT[split]:
                         continue
                 else:
-                    pass
+                    if repo_name.replace("-", "_") != split.replace("-", "_"):
+                        continue
         spec = make_spec(example, dataset_type, absolute=True)
         specs.append(spec)
 

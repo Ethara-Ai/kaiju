@@ -127,7 +127,7 @@ class TestCommit0DatasetFiltering:
     @patch(f"{MODULE}.os.path.exists", return_value=True)
     @patch(f"{MODULE}.load_dataset_from_config")
     @patch(f"{MODULE}.SPLIT", {"lite": ["myrepo"]})
-    def test_repo_split_not_in_split_passes_through(
+    def test_repo_split_not_in_split_filters_by_normalized_name(
         self, mock_load, mock_exists, mock_repo_cls, mock_create
     ):
         mock_load.return_value = [_make_example(repo="org/myrepo")]
@@ -137,6 +137,28 @@ class TestCommit0DatasetFiltering:
             "commit0",
             "test",
             "unknown_split",
+            "/base",
+            "owner",
+            "main",
+            github_token="t",
+        )
+        assert mock_repo_cls.call_count == 0
+
+    @patch(f"{MODULE}.create_repo_on_github")
+    @patch(f"{MODULE}.git.Repo")
+    @patch(f"{MODULE}.os.path.exists", return_value=True)
+    @patch(f"{MODULE}.load_dataset_from_config")
+    @patch(f"{MODULE}.SPLIT", {})
+    def test_repo_split_not_in_split_matches_with_normalization(
+        self, mock_load, mock_exists, mock_repo_cls, mock_create
+    ):
+        mock_load.return_value = [_make_example(repo="org/my-repo")]
+        mock_repo = _make_mock_repo(heads=["main"], remotes=[])
+        mock_repo_cls.return_value = mock_repo
+        main(
+            "commit0",
+            "test",
+            "my_repo",
             "/base",
             "owner",
             "main",

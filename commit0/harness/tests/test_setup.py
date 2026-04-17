@@ -206,13 +206,27 @@ class TestCommit0Dataset:
     @patch(f"{MODULE}.os.path.abspath", side_effect=lambda p: p)
     @patch(f"{MODULE}.clone_repo")
     @patch(f"{MODULE}.load_dataset_from_config")
-    def test_repo_split_not_in_SPLIT_passes_through(
+    def test_repo_split_not_in_SPLIT_filters_by_normalized_name(
         self, mock_load, mock_clone, mock_abs, mock_exists
     ):
         example = _repo_instance(repo="owner/myrepo")
         mock_load.return_value = iter([example])
         mock_clone.return_value = _make_repo_mock()
         main("wentingzhao/commit0_combined", "test", "unknown_split", "/base")
+        assert mock_clone.call_count == 0
+
+    @patch(f"{MODULE}.SPLIT", {})
+    @patch(f"{MODULE}.os.path.exists", return_value=False)
+    @patch(f"{MODULE}.os.path.abspath", side_effect=lambda p: p)
+    @patch(f"{MODULE}.clone_repo")
+    @patch(f"{MODULE}.load_dataset_from_config")
+    def test_repo_split_not_in_SPLIT_matches_with_normalization(
+        self, mock_load, mock_clone, mock_abs, mock_exists
+    ):
+        example = _repo_instance(repo="owner/my-repo")
+        mock_load.return_value = iter([example])
+        mock_clone.return_value = _make_repo_mock()
+        main("wentingzhao/commit0_combined", "test", "my_repo", "/base")
         assert mock_clone.call_count == 1
 
 

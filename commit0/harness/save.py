@@ -42,7 +42,8 @@ def main(
                     if repo_name not in SPLIT[repo_split]:
                         continue
                 else:
-                    pass
+                    if repo_name.replace("-", "_") != repo_split.replace("-", "_"):
+                        continue
         local_repo_path = f"{base_dir}/{repo_name}"
         github_repo_url = f"https://github.com/{owner}/{repo_name}.git"
         github_repo_url = github_repo_url.replace(

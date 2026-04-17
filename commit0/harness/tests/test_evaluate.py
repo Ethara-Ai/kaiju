@@ -143,7 +143,7 @@ class TestMainRepoSplit:
 
         base_patches["hash"].assert_called_once()
 
-    def test_commit0_repo_split_not_in_split_loads_all(self, base_patches):
+    def test_commit0_repo_split_not_in_split_filters_by_name(self, base_patches):
         example = _make_example()
         base_patches["load"].return_value = [example]
         base_patches["exists"].return_value = False
@@ -151,7 +151,17 @@ class TestMainRepoSplit:
 
         main(**_default_kwargs(repo_split="custom_unknown"))
 
-        assert base_patches["load"].call_count == 1
+        base_patches["executor"].submit.assert_not_called()
+
+    def test_commit0_repo_split_not_in_split_matches_normalized(self, base_patches):
+        example = _make_example(repo="github/my-repo")
+        base_patches["load"].return_value = [example]
+        base_patches["exists"].return_value = False
+        base_patches["get_tests"].return_value = [["test_a"]]
+
+        main(**_default_kwargs(repo_split="my_repo"))
+
+        assert base_patches["executor"].submit.call_count == 1
 
     def test_commit0_split_filters_out_non_matching_repo(self, base_patches):
         base_patches["split"]["lite"] = ["other-repo"]
