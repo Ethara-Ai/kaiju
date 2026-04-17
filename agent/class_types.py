@@ -27,6 +27,7 @@ class AgentConfig:
     cache_prompts: bool = True
     spec_summary_max_tokens: int = 4000
     max_test_output_length: int = 15000
+    model_short: str = ""  # Client-safe short model name (e.g. "opus4.6")
 
     # --- Thinking capture fields ---
     capture_thinking: bool = False  # Whether to capture reasoning tokens

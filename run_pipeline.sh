@@ -677,6 +677,7 @@ agent_name: aider
 YAMLEOF
     cat >> "$AGENT_CONFIG" <<EOF
 model_name: $(yaml_escape "${MODEL_NAME}")
+model_short: $(yaml_escape "${MODEL_SHORT}")
 use_user_prompt: false
 user_prompt: 'Here is your task:
 
@@ -1071,7 +1072,7 @@ RESULTS_JSON=""
 
 init_results() {
     RESULTS_JSON=$(jq -n \
-        --arg model "$MODEL_NAME" \
+        --arg model "$MODEL_SHORT" \
         --arg model_short "$MODEL_SHORT" \
         --arg branch "$BRANCH_NAME" \
         --arg backend "$BACKEND" \

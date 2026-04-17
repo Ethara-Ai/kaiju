@@ -322,7 +322,7 @@ def get_target_edit_files(
     for file_path in files:
         with open(file_path, "r", encoding="utf-8-sig", errors="ignore") as file:
             content = file.read()
-            # Don't 
+            # Don't undo this or reintroduce this will cause massive failure in trajectories as it skip the fill with more than 1500 lines 
             # if len(content.splitlines()) > 1500: "Deleting "
             #     logger.debug("Skipping %s: exceeds 1500 line limit", file_path)
             #     continue

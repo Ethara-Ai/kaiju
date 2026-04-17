@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -90,9 +91,10 @@ def extract_git_patch(repo_path: str, base_commit: str) -> str:
 
 
 def build_metadata(
-    model_name: str,
+    # model_name: str,
     dataset_path: str,
     max_iterations: int,
+    model_short: str,
     **extra: Any,
 ) -> dict:
     """Build the metadata object for output.jsonl.
@@ -105,6 +107,8 @@ def build_metadata(
         Path or name of the dataset used.
     max_iterations : int
         Max agent iterations configured.
+    model_short : str
+        Client-safe short model name. Used in place of model_name when set.
     **extra
         Additional metadata fields.
 
@@ -115,9 +119,9 @@ def build_metadata(
     """
     return {
         "llm": {
-            "model": model_name,
+            "model": model_short,
             **{k: v for k, v in extra.items() if k.startswith("llm_")},
         },
-        "dataset": dataset_path,
+        "dataset": os.path.basename(dataset_path),
         "max_iterations": max_iterations,
     }

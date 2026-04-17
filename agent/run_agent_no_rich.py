@@ -176,6 +176,7 @@ def run_agent_for_repo(
             model_name=agent_config.model_name,
             dataset_path=commit0_config_for_meta.get("dataset_name", ""),
             max_iterations=agent_config.max_iteration,
+            model_short=agent_config.model_short,
         )
 
     with DirContext(repo_path):
