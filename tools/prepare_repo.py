@@ -485,9 +485,13 @@ def _parse_dep_name(dep_str: str) -> str:
 
 def _add_dep(deps: dict[str, str], raw: str) -> None:
     """Add a dependency to *deps*, keyed by normalized name, preserving the full spec."""
-    name = _parse_dep_name(raw)
+    # Strip inline comments (e.g., "tornado>=6.3.2 # pinned by Snyk")
+    spec = raw.split("#")[0].strip()
+    if not spec:
+        return
+    name = _parse_dep_name(spec)
     if name:
-        deps.setdefault(name, raw.strip())
+        deps.setdefault(name, spec)
 
 
 def extract_all_dependencies(repo_dir: Path) -> tuple[list[str], list[str]]:
@@ -734,31 +738,52 @@ def generate_test_dict(repo_dir: Path, test_dir: str | None) -> dict:
 
 
 def _detect_python_version(repo_dir: Path) -> str | None:
-    """Extract minimum Python version as X.Y string.
+    """Extract Python version and clamp to the highest available Docker base.
 
-    Clamps to versions available in the Docker base image (3.10, 3.12).
+    Strategy: find the repo's minimum required version, then pick the HIGHEST
+    available base that satisfies it (prefer newest for best ecosystem support).
+    Available bases are derived from SUPPORTED_PYTHON_VERSIONS in constants.py.
     """
-    AVAILABLE_VERSIONS = [(3, 10), (3, 12)]
+    from commit0.harness.constants import SUPPORTED_PYTHON_VERSIONS
+
+    available = sorted(
+        (tuple(int(x) for x in v.split(".")) for v in SUPPORTED_PYTHON_VERSIONS),
+    )
+    if not available:
+        return None
+
+    highest = available[-1]
+
+    required_min: tuple[int, int] | None = None
 
     for config_name in ["pyproject.toml", "setup.cfg", "setup.py"]:
         config = repo_dir / config_name
         if not config.exists():
             continue
         content = config.read_text(errors="replace")
-
         m = re.search(
             r'(?:requires-python|python_requires)\s*=\s*["\']?>=?\s*(\d+\.\d+)', content
         )
         if m:
-            raw = m.group(1)
-            parts = raw.split(".")
-            major, minor = int(parts[0]), int(parts[1])
-            for av_major, av_minor in AVAILABLE_VERSIONS:
-                if (av_major, av_minor) >= (major, minor):
-                    return f"{av_major}.{av_minor}"
-            return f"{AVAILABLE_VERSIONS[-1][0]}.{AVAILABLE_VERSIONS[-1][1]}"
+            parts = m.group(1).split(".")
+            required_min = (int(parts[0]), int(parts[1]))
+            break
 
-    return None
+    pyver_file = repo_dir / ".python-version"
+    if required_min is None and pyver_file.exists():
+        raw = pyver_file.read_text().strip().split(".")[0:2]
+        if len(raw) == 2 and raw[0].isdigit() and raw[1].isdigit():
+            required_min = (int(raw[0]), int(raw[1]))
+
+    if required_min is None:
+        return f"{highest[0]}.{highest[1]}"
+
+    compatible = [v for v in available if v >= required_min]
+    if compatible:
+        best = compatible[-1]
+        return f"{best[0]}.{best[1]}"
+
+    return f"{highest[0]}.{highest[1]}"
 
 
 def _find_docs_url(repo_dir: Path, full_name: str) -> str:
