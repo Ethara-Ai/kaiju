@@ -140,6 +140,7 @@ def main(
                     if found_remote_branch:
                         break  # Stop checking other remotes if branch is found
                 if not found_remote_branch:
+                    logger.error("Branch %s does not exist locally or remotely for %s", branch, repo_name)
                     raise Exception(
                         f"Branch {branch} does not exist locally or remotely."
                     )
@@ -258,8 +259,10 @@ def main(
         if verbose > 0:
             test_output = Path(log_dir / "test_output.txt")
             print(test_output.read_text())
+        pytest_exit_code_file = Path(log_dir / "pytest_exit_code.txt")
+        _module_logger.debug("Reading pytest exit code from %s", pytest_exit_code_file)
         pytest_exit_code = int(
-            Path(log_dir / "pytest_exit_code.txt").read_text().strip()
+            pytest_exit_code_file.read_text().strip()
         )
         sys.exit(pytest_exit_code)
     except EvaluationError as e:

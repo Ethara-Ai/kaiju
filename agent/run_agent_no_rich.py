@@ -512,3 +512,4 @@ def run_agent(
 
             for result in results:
                 result.get()
+            logger.info("All %d agent workers completed", len(results))

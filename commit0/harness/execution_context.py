@@ -105,6 +105,7 @@ class Docker(ExecutionContext):
             files_to_collect=files_to_collect,
         )
 
+        logger.debug("Connecting to Docker daemon")
         self.client = docker.from_env()
         proxy_env = get_proxy_env() or None
         self.container = create_container(
@@ -182,6 +183,7 @@ class Modal(ExecutionContext):
             files_to_collect=files_to_collect,
         )
 
+        logger.debug("Looking up Modal app 'commit0'")
         self.app = modal.App.lookup("commit0", create_if_missing=True)
 
         reponame = spec.repo.split("/")[-1]
@@ -212,6 +214,7 @@ class Modal(ExecutionContext):
                 app=self.app,
                 volumes={"/vol": vol},
             )
+            self.logger.debug("Waiting for Modal sandbox to complete (timeout=%ds)", self.timeout)
             self.sandbox.wait()
 
             return_code = self.sandbox.returncode
@@ -225,6 +228,7 @@ class Modal(ExecutionContext):
                 fnames = vol.listdir("")
                 for fname in fnames:
                     fname = fname.path
+                    self.logger.debug("Collecting file from Modal volume: %s", fname)
                     with (self.log_dir / fname).open("wb") as f:
                         for data in vol.read_file(fname):
                             f.write(data)
@@ -286,6 +290,7 @@ class E2B(ExecutionContext):
         # prepare for eval
         if files_to_copy:
             for key, f in files_to_copy.items():
+                logger.debug("E2B: copying %s -> %s", f["src"], f["dest"].name)
                 with open(f["src"], "r") as fp:  # type: ignore
                     content = fp.read()
                     self.sb.files.write(f["dest"].name, content)  # type: ignore

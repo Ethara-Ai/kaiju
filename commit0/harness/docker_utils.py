@@ -17,6 +17,8 @@ from typing import Optional, List
 import docker.errors
 from docker.models.containers import Container
 
+logger = logging.getLogger(__name__)
+
 HEREDOC_DELIMITER = "EOF_1399519320"
 
 
@@ -55,14 +57,17 @@ def copy_to_container(container: Container, src: Path, dst: Path) -> None:
         data = tar_file.read()
 
     # Make directory if necessary
+    logger.debug("Container exec: mkdir -p %s", dst.parent)
     container.exec_run(f"mkdir -p {dst.parent}")
 
     # Send tar file to container and extract
     container.put_archive(os.path.dirname(dst), data)
+    logger.debug("Container exec: tar extract %s", dst)
     container.exec_run(f"tar -xf {dst}.tar -C {dst.parent}")
 
     # clean up in locally and in container
     tar_path.unlink()
+    logger.debug("Container exec: rm %s.tar", dst)
     container.exec_run(f"rm {dst}.tar")
 
 
