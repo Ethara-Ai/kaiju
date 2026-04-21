@@ -198,10 +198,10 @@ def create_stubbed_branch(
 
     gostubber_bin = _ensure_gostubber()
     default_branch = get_default_branch(repo_dir)
-    reference_commit = get_head_sha(repo_dir)
-    logger.info("  Reference commit (original): %s", reference_commit[:12])
 
     git(repo_dir, "checkout", default_branch)
+    reference_commit = get_head_sha(repo_dir)
+    logger.info("  Reference commit (original): %s", reference_commit[:12])
 
     try:
         git(repo_dir, "branch", "-D", branch_name, check=False)

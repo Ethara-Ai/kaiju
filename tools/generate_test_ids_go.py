@@ -38,6 +38,22 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 
+def _find_docker_image(repo_name: str) -> str | None:
+    """Find a built Docker image for this repo by searching commit0.repo.<name>.* tags."""
+    try:
+        client = docker.from_env()
+        short_name = repo_name.split("__")[-1].split("-")[0].lower()
+        needle = f"commit0.repo.{short_name}."
+        for image in client.images.list():
+            for tag in image.tags:
+                if tag.startswith(needle):
+                    return tag
+        return None
+    except Exception:
+        logger.debug("Failed to find Docker image for %s", repo_name, exc_info=True)
+        return None
+
+
 def _parse_go_test_list(stdout: str, module_path: str = "") -> list[str]:
     """Parse `go test -list .` output into test IDs.
 
@@ -233,6 +249,7 @@ def generate_for_dataset(
         if use_docker:
             test_ids = collect_test_ids_docker(
                 repo_name=repo_name,
+                image_name=_find_docker_image(repo_name),
                 reference_commit=entry.get("reference_commit"),
                 timeout=timeout,
             )

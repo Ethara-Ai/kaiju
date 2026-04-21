@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 # ============================================================
-# 3-Stage Go Evaluation Pipeline for Commit0
+# 3-Stage Go Pipeline for Commit0
 # ============================================================
+#
+# Go-adapted version of run_pipeline.sh.
+# Uses Go-specific CLI entry points, agent config, and constants.
 #
 # Usage:
 #     bash run_pipeline_go.sh --model <preset|model_id> --dataset <name>
 #
 # Examples:
-#     bash run_pipeline_go.sh --model opus --dataset conc
-#     bash run_pipeline_go.sh --model kimi --dataset conc --branch my-branch
-#
-# This is the Go counterpart of run_pipeline.sh. It routes through
-# commit0/cli_go.py and agent/config_go.py instead of the Python
-# pipeline commands.
+#     bash run_pipeline_go.sh --model opus --dataset ./conc_go_dataset.json
+#     bash run_pipeline_go.sh --model nova-lite --dataset ./conc_go_dataset.json
+#     bash run_pipeline_go.sh --model kimi --dataset conc_go --branch my-branch
 #
 # Requirements: jq, bc
 # ============================================================
@@ -28,7 +28,7 @@ if [[ -f "${BASE_DIR}/.env" ]]; then
 fi
 REPO_BASE="${BASE_DIR}/repos"
 VENV_PYTHON="${BASE_DIR}/.venv/bin/python"
-BACKEND="docker"
+BACKEND="local"
 MAX_ITERATION=3
 
 MODEL_ARG=""
@@ -37,9 +37,13 @@ BRANCH_OVERRIDE=""
 REPO_SPLIT_OVERRIDE=""
 STAGE_TIMEOUT=0
 EVAL_TIMEOUT=3600
+NO_STAGE3_LINT="false"
+USE_SPEC_INFO="false"
 INACTIVITY_TIMEOUT=900
 MAX_WALL_TIME=86400
+SKIP_TO_STAGE=""
 NUM_SAMPLES=1
+MAX_TEST_OUTPUT_LENGTH=15000
 
 print_usage() {
     cat <<'USAGE'
@@ -49,18 +53,19 @@ Required:
   --model    <preset|id>   Model preset or full model ID
   --dataset  <name|path>   Dataset name or path to JSON file
 
-Model presets: opus, kimi, glm5, minimax, gpt54
-
 Options:
   --branch         <name>    Override auto-generated branch name
   --repo-split     <name>    Override repo_split
   --max-iteration  <n>       Max agent iterations per stage (default: 3)
   --stage-timeout  <secs>    Hard stage timeout in seconds (default: 0=disabled)
   --eval-timeout   <secs>    Eval timeout in seconds (default: 3600)
-  --backend        <name>    Backend: docker or modal (default: docker)
-  --inactivity-timeout <s>   Kill agent if no activity for N seconds (default: 900)
+  --backend        <name>    Backend: local or modal (default: local)
+  --no-stage3-lint           Disable lint in Stage 3
+  --use-spec-info            Enable spec doc provisioning (disabled by default for Go)
+  --inactivity-timeout <s>   Kill agent if no log activity for N seconds (default: 900)
   --max-wall-time  <secs>    Absolute per-stage wall-time cap (default: 86400)
   --num-samples    <n>       Number of independent samples (default: 1)
+  --skip-to-stage  <1|2|3>   Skip to stage N (reuse prior stages)
   -h, --help                 Show this help
 USAGE
     exit 1
@@ -76,36 +81,89 @@ while [[ $# -gt 0 ]]; do
         --stage-timeout) [[ $# -lt 2 ]] && { echo "Error: --stage-timeout requires a value"; exit 1; }; STAGE_TIMEOUT="$2"; shift 2 ;;
         --eval-timeout)  [[ $# -lt 2 ]] && { echo "Error: --eval-timeout requires a value"; exit 1; }; EVAL_TIMEOUT="$2";  shift 2 ;;
         --backend)     [[ $# -lt 2 ]] && { echo "Error: --backend requires a value"; exit 1; }; BACKEND="$2";           shift 2 ;;
+        --no-stage3-lint) NO_STAGE3_LINT="true"; shift ;;
+        --use-spec-info) USE_SPEC_INFO="true"; shift ;;
         --inactivity-timeout) [[ $# -lt 2 ]] && { echo "Error: --inactivity-timeout requires a value"; exit 1; }; INACTIVITY_TIMEOUT="$2"; shift 2 ;;
         --max-wall-time) [[ $# -lt 2 ]] && { echo "Error: --max-wall-time requires a value"; exit 1; }; MAX_WALL_TIME="$2"; shift 2 ;;
         --num-samples) [[ $# -lt 2 ]] && { echo "Error: --num-samples requires a value"; exit 1; }; NUM_SAMPLES="$2"; shift 2 ;;
+        --skip-to-stage) [[ $# -lt 2 ]] && { echo "Error: --skip-to-stage requires a value"; exit 1; }; SKIP_TO_STAGE="$2"; shift 2 ;;
+        --max-test-output-length) [[ $# -lt 2 ]] && { echo "Error: --max-test-output-length requires a value"; exit 1; }; MAX_TEST_OUTPUT_LENGTH="$2"; shift 2 ;;
         -h|--help)     print_usage ;;
-        *)             echo "Error: Unknown argument '$1'"; print_usage ;;
+        *)             echo "Error: Unknown argument '$1'"; echo ""; print_usage ;;
     esac
 done
 
-[[ -z "$MODEL_ARG" ]] && { echo "Error: --model is required"; print_usage; }
-[[ -z "$DATASET_ARG" ]] && { echo "Error: --dataset is required"; print_usage; }
+[[ -z "$MODEL_ARG" ]] && { echo "Error: --model is required"; echo ""; print_usage; }
+[[ -z "$DATASET_ARG" ]] && { echo "Error: --dataset is required"; echo ""; print_usage; }
+
+if ! [[ "$NUM_SAMPLES" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: --num-samples must be a positive integer (got: $NUM_SAMPLES)"
+    exit 1
+fi
+
+if [[ "$NUM_SAMPLES" -gt 1 ]] && [[ -n "$SKIP_TO_STAGE" ]]; then
+    echo "Error: --skip-to-stage and --num-samples > 1 cannot be used together."
+    exit 1
+fi
+
+# ============================================================
+# Resolve Model (identical to Python pipeline)
+# ============================================================
 
 resolve_model() {
     local arg="$1"
     case "$arg" in
-        opus)    MODEL_NAME="bedrock/converse/arn:aws:bedrock:us-east-1:426628337772:application-inference-profile/4w7tmk1iplxi"; MODEL_SHORT="opus4.6"; CACHE_PROMPTS="true" ;;
-        kimi)    MODEL_NAME="bedrock/converse/arn:aws:bedrock:us-east-1:426628337772:application-inference-profile/5m69567zugvx"; MODEL_SHORT="kimi-k2.5"; CACHE_PROMPTS="false" ;;
-        glm5)    MODEL_NAME="bedrock/converse/arn:aws:bedrock:us-east-1:426628337772:application-inference-profile/8lzlkxguk85a"; MODEL_SHORT="glm-5"; CACHE_PROMPTS="false" ;;
-        minimax) MODEL_NAME="bedrock/converse/arn:aws:bedrock:us-east-1:426628337772:application-inference-profile/6oaav7wbxid4"; MODEL_SHORT="minimax-m2.5"; CACHE_PROMPTS="false" ;;
-        gpt54)   MODEL_NAME="openai/gpt-5.4"; MODEL_SHORT="gpt-5.4"; CACHE_PROMPTS="false" ;;
+        opus)
+            MODEL_NAME="bedrock/converse/arn:aws:bedrock:us-east-1:426628337772:application-inference-profile/4w7tmk1iplxi"
+            MODEL_SHORT="opus4.6"
+            CACHE_PROMPTS="true"
+            ;;
+        kimi)
+            MODEL_NAME="bedrock/converse/arn:aws:bedrock:us-east-1:426628337772:application-inference-profile/5m69567zugvx"
+            MODEL_SHORT="kimi-k2.5"
+            CACHE_PROMPTS="false"
+            ;;
+        glm5)
+            MODEL_NAME="bedrock/converse/arn:aws:bedrock:us-east-1:426628337772:application-inference-profile/8lzlkxguk85a"
+            MODEL_SHORT="glm-5"
+            CACHE_PROMPTS="false"
+            ;;
+        minimax)
+            MODEL_NAME="bedrock/converse/arn:aws:bedrock:us-east-1:426628337772:application-inference-profile/6oaav7wbxid4"
+            MODEL_SHORT="minimax-m2.5"
+            CACHE_PROMPTS="false"
+            ;;
+        nova-premier)
+            MODEL_NAME="bedrock/converse/arn:aws:bedrock:us-east-1:426628337772:application-inference-profile/td6kwwwp7q0e"
+            MODEL_SHORT="nova-premier"
+            CACHE_PROMPTS="false"
+            ;;
+        nova-lite)
+            MODEL_NAME="bedrock/converse/arn:aws:bedrock:us-east-1:426628337772:application-inference-profile/cddwmu6axlfp"
+            MODEL_SHORT="nova-2-lite"
+            CACHE_PROMPTS="false"
+            ;;
+        gpt54)
+            MODEL_NAME="openai/gpt-5.4"
+            MODEL_SHORT="gpt-5.4"
+            CACHE_PROMPTS="false"
+            ;;
         *)
             MODEL_NAME="$arg"
             MODEL_SHORT=$(echo "$arg" | sed 's|.*/||' | tr -dc 'a-zA-Z0-9._-' | cut -c1-20)
             [[ -z "$MODEL_SHORT" ]] && MODEL_SHORT="custom"
-            CACHE_PROMPTS="false"
+            if [[ "$arg" == bedrock/*claude* ]] || [[ "$arg" == bedrock/*anthropic* ]]; then
+                CACHE_PROMPTS="true"
+            else
+                CACHE_PROMPTS="false"
+            fi
             if [[ "$MODEL_NAME" == bedrock/* ]] && [[ "$MODEL_NAME" == *:aws:bedrock:* ]] && [[ "$MODEL_NAME" != bedrock/converse/* ]]; then
                 MODEL_NAME="bedrock/converse/${MODEL_NAME#bedrock/}"
             fi
             ;;
     esac
 }
+
 resolve_model "$MODEL_ARG"
 
 if [[ "$MODEL_NAME" == bedrock/* ]] && [[ -n "${AWS_BEARER_TOKEN_BEDROCK:-}" ]]; then
@@ -113,16 +171,36 @@ if [[ "$MODEL_NAME" == bedrock/* ]] && [[ -n "${AWS_BEARER_TOKEN_BEDROCK:-}" ]];
     export AWS_SHARED_CREDENTIALS_FILE="/dev/null"
 fi
 
+# ============================================================
+# Resolve Dataset (Go-specific: uses GO_SPLIT, not SPLIT)
+# ============================================================
+
 resolve_dataset() {
     local arg="$1"
+
     if [[ "$arg" == *.json ]] || [[ "$arg" == */* ]]; then
-        [[ ! -f "$arg" ]] && [[ -f "${BASE_DIR}/${arg}" ]] && arg="${BASE_DIR}/${arg}"
-        [[ ! -f "$arg" ]] && { echo "Error: Dataset file not found: $arg"; exit 1; }
+        if [[ ! -f "$arg" ]]; then
+            if [[ -f "${BASE_DIR}/${arg}" ]]; then
+                arg="${BASE_DIR}/${arg}"
+            else
+                echo "Error: Dataset file not found: $arg"
+                exit 1
+            fi
+        fi
         DATASET_FILE="$arg"
-        REPO_SPLIT="${REPO_SPLIT_OVERRIDE:-$(basename "$arg" .json | sed 's/_dataset$//')}"
+        if [[ -n "$REPO_SPLIT_OVERRIDE" ]]; then
+            REPO_SPLIT="$REPO_SPLIT_OVERRIDE"
+        else
+            local basename
+            basename=$(basename "$arg" .json)
+            basename="${basename%_dataset}"
+            basename="${basename%_go}"
+            REPO_SPLIT="$basename"
+        fi
         DATASET_SHORT=$(basename "$arg" .json)
         return
     fi
+
     local candidate="${BASE_DIR}/${arg}_go_dataset.json"
     [[ ! -f "$candidate" ]] && candidate="${BASE_DIR}/${arg}_dataset.json"
     if [[ -f "$candidate" ]]; then
@@ -131,12 +209,14 @@ resolve_dataset() {
         DATASET_SHORT="${arg}"
         return
     fi
+
     local known_splits
     known_splits=$("$VENV_PYTHON" -c "
 from commit0.harness.constants_go import GO_SPLIT
 for k in sorted(GO_SPLIT.keys()):
     print(k)
 " 2>/dev/null || true)
+
     if echo "$known_splits" | grep -qx "$arg"; then
         DATASET_FILE="wentingzhao/commit0_go"
         REPO_SPLIT="${REPO_SPLIT_OVERRIDE:-$arg}"
@@ -144,20 +224,34 @@ for k in sorted(GO_SPLIT.keys()):
         DATASET_SPLIT="test"
         return
     fi
+
     echo "Error: Cannot resolve dataset '$arg'"
+    echo ""
+    echo "Provide one of:"
+    echo "  - A path to a .json dataset file"
+    echo "  - A known name with a local <name>_go_dataset.json file"
+    echo "  - A GO_SPLIT key ($(echo "$known_splits" | tr '\n' ',' | sed 's/,$//'))"
     exit 1
 }
 
 DATASET_FILE=""
 REPO_SPLIT=""
 DATASET_SHORT=""
-DATASET_SPLIT="test"
+DATASET_SPLIT="train"
 resolve_dataset "$DATASET_ARG"
 
 BASE_BRANCH_NAME="${BRANCH_OVERRIDE:-aider-go-${MODEL_SHORT}-${DATASET_SHORT}}"
+if [[ -z "$BRANCH_OVERRIDE" ]] && [[ "$NO_STAGE3_LINT" == "true" ]]; then
+    BASE_BRANCH_NAME="${BASE_BRANCH_NAME}-nolint-s3"
+fi
+
 BASE_RUN_ID_FLAT=$(echo "go_${MODEL_SHORT}_${DATASET_SHORT}" | tr -dc 'a-zA-Z0-9._-')
 DATASET_DIR_NAME=$(echo "${DATASET_SHORT}" | tr -dc 'a-zA-Z0-9._-')
 MODEL_DIR_NAME=$(echo "${MODEL_SHORT}" | tr -dc 'a-zA-Z0-9._-')
+if [[ "$NO_STAGE3_LINT" == "true" ]]; then
+    MODEL_DIR_NAME="${MODEL_DIR_NAME}_nolint-s3"
+    BASE_RUN_ID_FLAT="${BASE_RUN_ID_FLAT}_nolint-s3"
+fi
 
 set_sample_vars() {
     local sample_idx="$1"
@@ -173,182 +267,364 @@ set_sample_vars() {
     COMMIT0_CONFIG="${BASE_DIR}/.commit0_go_${RUN_ID}.yaml"
     AGENT_CONFIG="${BASE_DIR}/.agent_go_${RUN_ID}.yaml"
 }
+
 set_sample_vars 1
+
+# ============================================================
+# Preflight Checks
+# ============================================================
+
+preflight() {
+    local errors=0
+
+    for cmd in jq bc; do
+        if ! command -v "$cmd" &>/dev/null; then
+            echo "Error: Required command '$cmd' not found"
+            errors=$((errors + 1))
+        fi
+    done
+
+    if [[ ! -x "$VENV_PYTHON" ]]; then
+        echo "Error: Python venv not found at $VENV_PYTHON"
+        errors=$((errors + 1))
+    fi
+
+    if [[ ! -d "$REPO_BASE" ]]; then
+        echo "Error: Repo base directory not found at $REPO_BASE"
+        errors=$((errors + 1))
+    fi
+
+    if [[ "$MODEL_NAME" == bedrock/* ]]; then
+        if [[ -z "${AWS_ACCESS_KEY_ID:-}" ]] && [[ -z "${AWS_BEARER_TOKEN_BEDROCK:-}" ]] && [[ -z "${AWS_PROFILE:-}" ]]; then
+            echo "Warning: No AWS credentials detected"
+        fi
+    elif [[ "$MODEL_NAME" == openai/* ]] || [[ "$MODEL_NAME" == gpt* ]]; then
+        if [[ -z "${OPENAI_API_KEY:-}" ]]; then
+            echo "Error: OPENAI_API_KEY not set (required for model: $MODEL_NAME)"
+            errors=$((errors + 1))
+        fi
+    fi
+
+    if [[ "$DATASET_FILE" != wentingzhao/* ]] && [[ ! -f "$DATASET_FILE" ]]; then
+        echo "Error: Dataset file not found: $DATASET_FILE"
+        errors=$((errors + 1))
+    fi
+
+    if [[ "$DATASET_FILE" != wentingzhao/* ]] && [[ -f "$DATASET_FILE" ]]; then
+        local repos_in_dataset
+        repos_in_dataset=$(_PIPELINE_DATASET_FILE="$DATASET_FILE" "$VENV_PYTHON" -c "
+import json, os
+with open(os.environ['_PIPELINE_DATASET_FILE']) as f:
+    data = json.load(f)
+for item in data:
+    repo = item['repo'].split('/')[-1]
+    print(repo)
+" 2>/dev/null || true)
+
+        if [[ -n "$repos_in_dataset" ]]; then
+            while IFS= read -r repo; do
+                if [[ ! -d "${REPO_BASE}/${repo}" ]]; then
+                    echo "Error: Repo directory not found: ${REPO_BASE}/${repo}"
+                    echo "  Run: python commit0/cli_go.py setup all --dataset-name $DATASET_FILE"
+                    errors=$((errors + 1))
+                fi
+            done <<< "$repos_in_dataset"
+        fi
+    fi
+
+    if [[ "$errors" -gt 0 ]]; then
+        echo ""
+        echo "Preflight failed with $errors error(s). Fix the above and retry."
+        exit 1
+    fi
+
+    preflight_model_api
+}
+
+preflight_model_api() {
+    log "  Probing model API: ${MODEL_NAME} ..."
+
+    local probe_output
+    probe_output=$(mktemp)
+
+    set +e
+    timeout ${PROBE_TIMEOUT:-120} "$VENV_PYTHON" - "$MODEL_NAME" "$CACHE_PROMPTS" <<'PYEOF' >"$probe_output" 2>&1
+import sys, os
+
+model_name = sys.argv[1]
+cache_prompts = sys.argv[2].lower() == "true"
+
+os.environ.setdefault("LITELLM_LOG", "ERROR")
+
+import litellm
+litellm.drop_params = True
+
+from aider.models import Model
+from aider.llm import litellm as aider_litellm
+
+try:
+    m = Model(model_name)
+except Exception as e:
+    print(f"PROBE_FAIL_MODEL: aider Model() init failed: {str(e)[:400]}")
+    sys.exit(1)
+
+messages = [{"role": "user", "content": "Reply with exactly: OK"}]
+
+try:
+    resp = aider_litellm.completion(
+        model=m.name,
+        messages=messages,
+        max_tokens=8,
+        timeout=60,
+    )
+    content = resp.choices[0].message.content.strip()
+    print(f"PROBE_OK: model responded: {content!r}")
+except Exception as e:
+    err = str(e)
+    if "AuthenticationError" in err or "InvalidClientTokenId" in err:
+        print(f"PROBE_FAIL_AUTH: {err[:500]}")
+    elif "AccessDeniedException" in err or "not authorized" in err.lower():
+        print(f"PROBE_FAIL_ACCESS: {err[:500]}")
+    elif "ModelNotReady" in err or "not found" in err.lower() or "does not exist" in err.lower():
+        print(f"PROBE_FAIL_MODEL: {err[:500]}")
+    elif "RateLimitError" in err or "ThrottlingException" in err:
+        print(f"PROBE_OK: model reachable (rate-limited): {err[:200]}")
+    elif "cache" in err.lower():
+        print(f"PROBE_FAIL_CACHE: {err[:500]}")
+    else:
+        print(f"PROBE_FAIL_UNKNOWN: {err[:500]}")
+    sys.exit(1)
+PYEOF
+    local probe_rc=$?
+    set -e
+
+    local probe_result
+    probe_result=$(cat "$probe_output")
+    rm -f "$probe_output"
+
+    if [[ $probe_rc -ne 0 ]]; then
+        echo ""
+        echo "========================================"
+        echo "MODEL API PREFLIGHT FAILED"
+        echo "========================================"
+        echo "Model: ${MODEL_NAME}"
+        echo ""
+        echo "$probe_result"
+        echo ""
+        if [[ "$probe_result" == *PROBE_FAIL_AUTH* ]]; then
+            echo "Fix: Check your API credentials"
+        elif [[ "$probe_result" == *PROBE_FAIL_ACCESS* ]]; then
+            echo "Fix: Verify IAM policy includes bedrock:InvokeModel"
+        elif [[ "$probe_result" == *PROBE_FAIL_MODEL* ]]; then
+            echo "Fix: Model ID or ARN is invalid"
+        elif [[ "$probe_result" == *PROBE_FAIL_CACHE* ]]; then
+            echo "Fix: CACHE_PROMPTS=${CACHE_PROMPTS}. This model may not support prompt caching."
+        else
+            echo "Fix: Review the error above."
+        fi
+        echo "========================================"
+        echo ""
+        exit 1
+    fi
+
+    log "  $probe_result"
+}
+
+# ============================================================
+# Helpers
+# ============================================================
 
 ts() { date "+%Y-%m-%d %H:%M:%S"; }
 log() { echo "[$(ts)] [${RUN_ID}] $1"; }
 
-write_commit0_go_config() {
+get_mtime() {
+    stat -c '%Y' "$1" 2>/dev/null \
+        || stat -f '%m' "$1" 2>/dev/null \
+        || "$VENV_PYTHON" -c "import os,sys; print(int(os.path.getmtime(sys.argv[1])))" "$1" 2>/dev/null \
+        || echo "0"
+}
+
+get_newest_aider_log() {
+    local search_dir="$1"
+    local newest=""
+    local newest_mtime=0
+    while IFS= read -r logfile; do
+        local mt
+        mt=$(get_mtime "$logfile")
+        if [[ "$mt" -gt "$newest_mtime" ]]; then
+            newest_mtime="$mt"
+            newest="$logfile"
+        fi
+    done < <(find "$search_dir" -name "aider.log" 2>/dev/null)
+    echo "$newest"
+}
+
+# ============================================================
+# Config Writers (Go-specific)
+# ============================================================
+
+write_commit0_config() {
     local ds_value
-    if [[ "$DATASET_FILE" == wentingzhao/* ]]; then
-        ds_value="$DATASET_FILE"
-    else
-        ds_value="$(cd "$(dirname "$DATASET_FILE")" && pwd)/$(basename "$DATASET_FILE")"
-    fi
+    ds_value="$(cd "$(dirname "$DATASET_FILE")" && pwd)/$(basename "$DATASET_FILE")"
+
     cat > "$COMMIT0_CONFIG" <<EOF
 base_dir: ${REPO_BASE}
 dataset_name: ${ds_value}
 dataset_split: ${DATASET_SPLIT}
 repo_split: ${REPO_SPLIT}
 EOF
-    log "  Wrote Go commit0 config: ${COMMIT0_CONFIG}"
+    log "  Wrote commit0 Go config: ${COMMIT0_CONFIG}"
 }
 
-write_go_agent_config() {
+yaml_escape() {
+    local val="$1"
+    val="${val//\'/\'\'}"
+    echo "'${val}'"
+}
+
+write_agent_config() {
     local run_tests="$1"
     local use_lint_info="$2"
-    local use_unit_tests_info="$3"
+    local run_entire_dir_lint="$3"
+    local use_unit_tests_info="$4"
+    local add_import_module_to_context="$5"
+    local use_spec_info="${6:-false}"
 
-    cat > "$AGENT_CONFIG" <<EOF
+    cat > "$AGENT_CONFIG" <<'YAMLEOF'
 agent_name: aider
-model_name: '${MODEL_NAME}'
-model_short: '${MODEL_SHORT}'
+YAMLEOF
+    cat >> "$AGENT_CONFIG" <<EOF
+model_name: $(yaml_escape "${MODEL_NAME}")
+model_short: $(yaml_escape "${MODEL_SHORT}")
 use_user_prompt: false
 user_prompt: 'You need to complete the implementations for all stubbed functions
-  (those containing "STUB: not implemented") and pass the unit tests.
+  (those containing the marker string "STUB: not implemented") and pass the unit tests.
+
   Do not change the names or signatures of existing functions.
+
   IMPORTANT: You must NEVER modify, edit, or delete any test files
-  (files matching *_test.go). Test files are read-only.'
+  (files matching *_test.go). Test files are read-only and define
+  the expected behavior.'
 use_topo_sort_dependencies: false
-add_import_module_to_context: false
+add_import_module_to_context: ${add_import_module_to_context}
 use_repo_info: false
 max_repo_info_length: 10000
 use_unit_tests_info: ${use_unit_tests_info}
 max_unit_tests_info_length: 10000
-use_spec_info: false
+use_spec_info: ${use_spec_info}
 max_spec_info_length: 10000
+spec_summary_max_tokens: 4000
 use_lint_info: ${use_lint_info}
 max_lint_info_length: 10000
-run_entire_dir_lint: true
+run_entire_dir_lint: ${run_entire_dir_lint}
 pre_commit_config_path: ''
 run_tests: ${run_tests}
 max_iteration: ${MAX_ITERATION}
 record_test_for_each_commit: false
 cache_prompts: ${CACHE_PROMPTS}
-max_test_output_length: 15000
+max_test_output_length: ${MAX_TEST_OUTPUT_LENGTH}
 capture_thinking: true
 trajectory_md: true
 output_jsonl: true
 EOF
-    log "  Wrote Go agent config: ${AGENT_CONFIG}"
+    log "  Wrote agent Go config: ${AGENT_CONFIG}"
 }
 
-RESULTS_JSON=""
+# ============================================================
+# Run Agent (Go-specific: uses agent/config_go.py run)
+# ============================================================
 
-init_results() {
-    RESULTS_JSON=$(jq -n \
-        --arg model "$MODEL_SHORT" \
-        --arg branch "$BRANCH_NAME" \
-        --arg backend "$BACKEND" \
-        --arg repo_split "$REPO_SPLIT" \
-        --arg dataset "$DATASET_FILE" \
-        --arg dataset_short "$DATASET_SHORT" \
-        --argjson max_iter "$MAX_ITERATION" \
-        --arg start_time "$(ts)" \
-        --arg language "go" \
-        '{
-            language: $language,
-            model: $model,
-            branch: $branch,
-            backend: $backend,
-            repo_split: $repo_split,
-            dataset: $dataset,
-            dataset_short: $dataset_short,
-            max_iteration: $max_iter,
-            start_time: $start_time
-        }')
-}
+AGENT_PID=""
+AGENT_ELAPSED=0
+AGENT_RC=0
 
-save_results() {
-    mkdir -p "$(dirname "$PIPELINE_LOG")"
-    echo "$RESULTS_JSON" | jq '.' > "$PIPELINE_LOG"
-}
-
-run_go_setup() {
-    log "Setting up Go repos..."
-    "$VENV_PYTHON" commit0/cli_go.py setup "$REPO_SPLIT" \
-        --dataset-name "$DATASET_FILE" \
-        --dataset-split "$DATASET_SPLIT" \
-        --base-dir "$REPO_BASE"
-}
-
-run_go_build() {
-    log "Building Go Docker images..."
-    "$VENV_PYTHON" commit0/cli_go.py build \
-        --num-workers 1
-}
-
-EVAL_NUM_PASSED=0
-EVAL_NUM_TESTS=0
-EVAL_PASS_RATE="0.0"
-EVAL_ELAPSED=0
-
-run_go_evaluate() {
-    local branch="$1"
-    local stage_label="${2:-eval}"
-
-    local eval_log="${LOG_BASE}/${stage_label}_eval.log"
-    log "  Running Go evaluation..."
-
+watchdog_run() {
+    local agent_pid="$1"
+    local log_dir="$2"
+    local inactivity_limit="$3"
+    local hard_timeout="$4"
+    local absolute_max="${5:-86400}"
     local start_time
     start_time=$(date +%s)
+    local hard_timeout_warned="false"
 
-    set +e
-    timeout "$EVAL_TIMEOUT" "$VENV_PYTHON" commit0/cli_go.py evaluate \
-        --branch "$branch" \
-        --backend "$BACKEND" \
-        --timeout 300 \
-        --num-cpus 1 \
-        --num-workers 1 >"$eval_log" 2>&1
-    local eval_rc=$?
-    set -e
+    while kill -0 "$agent_pid" 2>/dev/null; do
+        sleep 15
 
-    local end_time
-    end_time=$(date +%s)
-    EVAL_ELAPSED=$(( end_time - start_time ))
+        local now_epoch
+        now_epoch=$(date +%s)
+        local latest_mtime=0
 
-    log "  Evaluation finished in ${EVAL_ELAPSED}s (rc=${eval_rc})"
+        local latest_log
+        latest_log=$(get_newest_aider_log "$log_dir")
+        if [[ -n "$latest_log" ]] && [[ -f "$latest_log" ]]; then
+            local aider_mtime
+            aider_mtime=$(get_mtime "$latest_log")
+            [[ "$aider_mtime" -gt "$latest_mtime" ]] && latest_mtime="$aider_mtime"
+        fi
 
-    EVAL_NUM_PASSED=0
-    EVAL_NUM_TESTS=0
-    EVAL_PASS_RATE="0.0"
+        local agent_run_log="${log_dir}/agent_run.log"
+        if [[ -f "$agent_run_log" ]]; then
+            local run_log_mtime
+            run_log_mtime=$(get_mtime "$agent_run_log")
+            [[ "$run_log_mtime" -gt "$latest_mtime" ]] && latest_mtime="$run_log_mtime"
+        fi
 
-    local output
-    output=$(cat "$eval_log")
+        local idle=0
+        local agent_active="false"
+        if [[ "$latest_mtime" -gt 0 ]]; then
+            idle=$(( now_epoch - latest_mtime ))
+            [[ $idle -lt $inactivity_limit ]] && agent_active="true"
+        else
+            agent_active="true"
+        fi
 
-    local total_passed=0
-    local total_tests=0
-    while IFS= read -r line; do
-        [[ -z "$line" ]] && continue
-        [[ "$line" == repo,* ]] && continue
-        if [[ "$line" == *","*"/"* ]]; then
-            local passed_total passed total
-            passed_total=$(echo "$line" | cut -d',' -f3 | tr -d ' ')
-            if [[ "$passed_total" == *"/"* ]]; then
-                passed=$(echo "$passed_total" | cut -d'/' -f1)
-                total=$(echo "$passed_total" | cut -d'/' -f2)
-                if [[ "$passed" =~ ^[0-9]+$ ]] && [[ "$total" =~ ^[0-9]+$ ]]; then
-                    total_passed=$((total_passed + passed))
-                    total_tests=$((total_tests + total))
+        if [[ "$absolute_max" -gt 0 ]]; then
+            local wall_elapsed=$(( now_epoch - start_time ))
+            if [[ $wall_elapsed -ge $absolute_max ]]; then
+                log "  WATCHDOG: Absolute wall-time cap ${absolute_max}s reached. Force-killing agent."
+                kill "$agent_pid" 2>/dev/null || true; sleep 2; kill -9 "$agent_pid" 2>/dev/null || true
+                wait "$agent_pid" 2>/dev/null || true
+                return 124
+            fi
+        fi
+
+        if [[ "$hard_timeout" -gt 0 ]]; then
+            local elapsed=$(( now_epoch - start_time ))
+            if [[ $elapsed -ge $hard_timeout ]]; then
+                if [[ "$agent_active" == "true" ]]; then
+                    if [[ "$hard_timeout_warned" == "false" ]]; then
+                        log "  WATCHDOG: Hard timeout ${hard_timeout}s reached but agent still active."
+                        hard_timeout_warned="true"
+                    fi
+                else
+                    log "  WATCHDOG: Hard timeout ${hard_timeout}s reached and agent inactive (${idle}s). Killing."
+                    kill "$agent_pid" 2>/dev/null || true; sleep 2; kill -9 "$agent_pid" 2>/dev/null || true
+                    wait "$agent_pid" 2>/dev/null || true
+                    return 124
                 fi
             fi
         fi
-    done <<< "$output"
 
-    EVAL_NUM_PASSED="$total_passed"
-    EVAL_NUM_TESTS="$total_tests"
-    if [[ "$total_tests" -gt 0 ]]; then
-        EVAL_PASS_RATE=$(echo "scale=6; $total_passed / $total_tests" | bc)
-    fi
+        if [[ "$latest_mtime" -gt 0 ]] && [[ "$agent_active" == "false" ]]; then
+            log "  WATCHDOG: No log activity for ${idle}s (limit: ${inactivity_limit}s). Agent appears stuck."
+            log "  WATCHDOG: Killing agent (PID ${agent_pid})."
+            kill "$agent_pid" 2>/dev/null || true; sleep 2; kill -9 "$agent_pid" 2>/dev/null || true
+            wait "$agent_pid" 2>/dev/null || true
+            return 124
+        fi
+    done
+
+    wait "$agent_pid" 2>/dev/null
+    local rc=$?
+    [[ $rc -eq 127 ]] && rc=0
+    return $rc
 }
 
-run_go_agent() {
+run_agent() {
     local branch="$1"
     local override="$2"
     local log_dir="$3"
-
-    local agent_log="${log_dir}/agent_run.log"
-    mkdir -p "$log_dir"
 
     local cmd=(
         "$VENV_PYTHON" agent/config_go.py run "$branch"
@@ -363,204 +639,636 @@ run_go_agent() {
         cmd+=(--override-previous-changes)
     fi
 
-    log "  Running Go agent..."
+    local agent_log="${log_dir}/agent_run.log"
+    log "  Running Go agent (watchdog: inactivity=${INACTIVITY_TIMEOUT}s, hard=${STAGE_TIMEOUT}s, wall-cap=${MAX_WALL_TIME}s)"
+    log "  Command: ${cmd[*]}"
+    log "  Output → ${agent_log}"
+
     local start_time
     start_time=$(date +%s)
 
     set +e
-    "${cmd[@]}" >>"$agent_log" 2>&1
+    "${cmd[@]}" >>"$agent_log" 2>&1 &
+    local agent_pid=$!
+    AGENT_PID=$agent_pid
+
+    watchdog_run "$agent_pid" "$log_dir" "$INACTIVITY_TIMEOUT" "$STAGE_TIMEOUT" "$MAX_WALL_TIME"
     AGENT_RC=$?
+    AGENT_PID=""
     set -e
 
     local end_time
     end_time=$(date +%s)
     AGENT_ELAPSED=$(( end_time - start_time ))
-    log "  Agent finished in ${AGENT_ELAPSED}s (rc=${AGENT_RC})"
+
+    if [[ $AGENT_RC -eq 124 ]]; then
+        log "  Agent killed by watchdog after ${AGENT_ELAPSED}s"
+    elif [[ $AGENT_RC -ne 0 ]]; then
+        log "  Agent FAILED (rc=${AGENT_RC}) in ${AGENT_ELAPSED}s — last 20 lines:"
+        tail -20 "$agent_log" 2>/dev/null | while IFS= read -r line; do log "    | $line"; done
+    else
+        log "  Agent finished in ${AGENT_ELAPSED}s, returncode=${AGENT_RC}"
+    fi
 }
 
-AGENT_ELAPSED=0
-AGENT_RC=0
+# ============================================================
+# Run Evaluate (Go-specific: uses cli_go.py evaluate)
+# ============================================================
+
+EVAL_NUM_PASSED=0
+EVAL_NUM_TESTS=0
+EVAL_PASS_RATE="0.0"
+EVAL_RUNTIME="0.0"
+EVAL_ELAPSED=0
+
+run_evaluate() {
+    local branch="$1"
+    local stage_label="${2:-eval}"
+
+    local cmd=(
+        "$VENV_PYTHON" commit0/cli_go.py evaluate
+        --branch "$branch"
+        --backend "$BACKEND"
+        --timeout 300
+        --num-cpus 1
+        --num-workers 1
+        --commit0-config-file "$COMMIT0_CONFIG"
+    )
+
+    local eval_log="${LOG_BASE}/${stage_label}_eval.log"
+    log "  Running Go evaluation: ${cmd[*]}"
+    log "  Output → ${eval_log}"
+
+    local start_time
+    start_time=$(date +%s)
+
+    set +e
+    timeout "$EVAL_TIMEOUT" "${cmd[@]}" >"$eval_log" 2>&1
+    local eval_rc=$?
+    set -e
+
+    local end_time
+    end_time=$(date +%s)
+    EVAL_ELAPSED=$(( end_time - start_time ))
+
+    log "  Evaluation finished in ${EVAL_ELAPSED}s (rc=${eval_rc})"
+
+    local combined_output
+    combined_output=$(cat "$eval_log")
+    parse_eval_output "$combined_output"
+
+    if [[ $eval_rc -ne 0 ]]; then
+        log "  Evaluation FAILED — last 10 lines:"
+        tail -10 "$eval_log" 2>/dev/null | while IFS= read -r line; do log "    | $line"; done
+    fi
+}
+
+parse_eval_output() {
+    local output="$1"
+
+    EVAL_NUM_PASSED=0
+    EVAL_NUM_TESTS=0
+    EVAL_PASS_RATE="0.0"
+    EVAL_RUNTIME="0.0"
+
+    local total_passed=0
+    local total_tests=0
+    local total_runtime="0.0"
+    local found_any="false"
+
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        [[ "$line" == repo,* ]] && continue
+        if [[ "$line" == *","*"/"* ]]; then
+            local runtime passed_total passed total
+            runtime=$(echo "$line" | cut -d',' -f2 | tr -d ' ')
+            passed_total=$(echo "$line" | cut -d',' -f3 | tr -d ' ')
+
+            if [[ "$passed_total" == *"/"* ]]; then
+                passed=$(echo "$passed_total" | cut -d'/' -f1)
+                total=$(echo "$passed_total" | cut -d'/' -f2)
+
+                if [[ "$passed" =~ ^[0-9]+$ ]] && [[ "$total" =~ ^[0-9]+$ ]]; then
+                    total_passed=$((total_passed + passed))
+                    total_tests=$((total_tests + total))
+                    if [[ "$runtime" =~ ^[0-9]*\.?[0-9]+$ ]]; then
+                        total_runtime=$(echo "scale=4; $total_runtime + $runtime" | bc)
+                    fi
+                    found_any="true"
+                fi
+            fi
+        fi
+    done <<< "$output"
+
+    if [[ "$found_any" == "true" ]]; then
+        EVAL_NUM_PASSED="$total_passed"
+        EVAL_NUM_TESTS="$total_tests"
+        EVAL_RUNTIME="$total_runtime"
+        if [[ "$total_tests" -gt 0 ]]; then
+            EVAL_PASS_RATE=$(echo "scale=6; $total_passed / $total_tests" | bc)
+        fi
+    fi
+
+    if [[ "$EVAL_PASS_RATE" == "0.0" ]] || [[ "$EVAL_PASS_RATE" == "0" ]]; then
+        local avg_line
+        avg_line=$(echo "$output" | grep -i "average pass rate:" || true)
+        if [[ -n "$avg_line" ]]; then
+            local rate
+            rate=$(echo "$avg_line" | awk -F':' '{print $NF}' | tr -d ' ')
+            if [[ -n "$rate" ]] && [[ "$rate" =~ ^[0-9.]+$ ]]; then
+                EVAL_PASS_RATE="$rate"
+            fi
+        fi
+    fi
+}
+
+# ============================================================
+# Cost Extraction (identical to Python pipeline)
+# ============================================================
+
+extract_all_stage_costs() {
+    local log_dir="$1"
+    if [[ ! -d "$log_dir" ]]; then
+        echo "0.0000"
+        return
+    fi
+    local err_file="${log_dir}/cost_extract.err"
+    [[ -w "$log_dir" ]] || err_file="/dev/null"
+    local result
+    result=$("$VENV_PYTHON" - "$log_dir" <<'PYEOF' 2>>"$err_file"
+import os, re, sys
+log_dir = sys.argv[1]
+COST_RE = re.compile(r"Cost:\s+\$\d+\.\d+\s+(?:message|request),\s+\$(\d+\.\d+)\s+session")
+total = 0.0
+try:
+    for root, _dirs, files in os.walk(log_dir):
+        for fname in files:
+            if fname != "aider.log":
+                continue
+            fpath = os.path.join(root, fname)
+            try:
+                with open(fpath, encoding="utf-8", errors="replace") as f:
+                    last_match = None
+                    for line in f:
+                        m = COST_RE.search(line)
+                        if m:
+                            last_match = m
+                    if last_match:
+                        total += float(last_match.group(1))
+            except (OSError, ValueError):
+                pass
+except Exception as exc:
+    print(f"cost_extract: {exc}", file=sys.stderr)
+print(f"{total:.4f}")
+PYEOF
+) || true
+    if [[ "$result" =~ ^[0-9]+\.[0-9]+$ ]]; then
+        echo "$result"
+    else
+        echo "0.0000"
+    fi
+}
 
 format_pct() {
     local val="$1"
     printf "%.1f%%" "$(echo "$val * 100" | bc)"
 }
 
-preflight() {
-    local errors=0
-    for cmd in jq bc; do
-        if ! command -v "$cmd" &>/dev/null; then
-            echo "Error: Required command '$cmd' not found"
-            errors=$((errors + 1))
-        fi
-    done
-    [[ ! -x "$VENV_PYTHON" ]] && { echo "Error: Python venv not found at $VENV_PYTHON"; errors=$((errors + 1)); }
-    [[ ! -d "$REPO_BASE" ]] && { echo "Error: Repo base not found at $REPO_BASE"; errors=$((errors + 1)); }
-    [[ "$errors" -gt 0 ]] && { echo "Preflight failed with $errors error(s)."; exit 1; }
+# ============================================================
+# JSON Results
+# ============================================================
+
+RESULTS_JSON=""
+
+init_results() {
+    RESULTS_JSON=$(jq -n \
+        --arg model "$MODEL_SHORT" \
+        --arg model_short "$MODEL_SHORT" \
+        --arg branch "$BRANCH_NAME" \
+        --arg backend "$BACKEND" \
+        --arg repo_split "$REPO_SPLIT" \
+        --arg dataset "$DATASET_FILE" \
+        --arg dataset_short "$DATASET_SHORT" \
+        --argjson max_iter "$MAX_ITERATION" \
+        --arg cache_prompts "$CACHE_PROMPTS" \
+        --arg start_time "$(ts)" \
+        --arg language "go" \
+        '{
+            language: $language,
+            model: $model,
+            model_short: $model_short,
+            branch: $branch,
+            backend: $backend,
+            repo_split: $repo_split,
+            dataset: $dataset,
+            dataset_short: $dataset_short,
+            max_iteration: $max_iter,
+            cache_prompts: $cache_prompts,
+            start_time: $start_time
+        }')
 }
+
+save_results() {
+    mkdir -p "$(dirname "$PIPELINE_LOG")"
+    echo "$RESULTS_JSON" | jq '.' > "$PIPELINE_LOG"
+}
+
+# ============================================================
+# Pipeline Stages (Go-specific agent config)
+# ============================================================
 
 stage_1_draft() {
     log "======================================================================"
     log "STAGE 1: Draft Initial Go Implementations"
     log "======================================================================"
 
-    write_go_agent_config "false" "false" "true"
+    write_agent_config "false" "false" "false" "true" "false" "$USE_SPEC_INFO"
+
     local stage_log_dir="${LOG_BASE}/stage1_draft"
     mkdir -p "$stage_log_dir"
 
-    run_go_agent "$BRANCH_NAME" "true" "$stage_log_dir"
-    run_go_evaluate "$BRANCH_NAME" "stage1"
+    run_agent "$BRANCH_NAME" "true" "$stage_log_dir"
+    local elapsed="$AGENT_ELAPSED"
+    local rc="$AGENT_RC"
+
+    local cost
+    cost=$(extract_all_stage_costs "$stage_log_dir") || { log "ERROR: Stage 1 cost extraction failed"; return 1; }
+    log "  Stage 1 cost: \$${cost}"
+
+    run_evaluate "$BRANCH_NAME" "stage1"
+    local eval_time="$EVAL_ELAPSED"
 
     log "  Stage 1 results: ${EVAL_NUM_PASSED}/${EVAL_NUM_TESTS} ($(format_pct "$EVAL_PASS_RATE"))"
 
     RESULTS_JSON=$(echo "$RESULTS_JSON" | jq \
-        --argjson elapsed "$AGENT_ELAPSED" \
-        --argjson eval_time "$EVAL_ELAPSED" \
-        --argjson rc "$AGENT_RC" \
+        --arg name "Draft (no feedback)" \
+        --argjson elapsed "$elapsed" \
+        --argjson eval_time "$eval_time" \
+        --argjson cost "$cost" \
+        --argjson rc "$rc" \
+        --argjson runtime "${EVAL_RUNTIME:-0.0}" \
         --argjson num_passed "$EVAL_NUM_PASSED" \
         --argjson num_tests "$EVAL_NUM_TESTS" \
         --argjson pass_rate "$EVAL_PASS_RATE" \
         '.stage1 = {
-            name: "Draft (no feedback)",
+            name: $name,
             elapsed_s: $elapsed,
             eval_time_s: $eval_time,
+            cost_usd: $cost,
             returncode: $rc,
+            runtime: $runtime,
             num_passed: $num_passed,
             num_tests: $num_tests,
             pass_rate: $pass_rate
         }')
+
     save_results
 }
 
 stage_2_lint_refine() {
     log "======================================================================"
-    log "STAGE 2: Refine with Go Static Analysis"
+    log "STAGE 2: Refine with Go Static Analysis (goimports/staticcheck/govet)"
     log "======================================================================"
 
-    write_go_agent_config "false" "true" "false"
+    write_agent_config "false" "true" "true" "false" "false" "$USE_SPEC_INFO"
+
     local stage_log_dir="${LOG_BASE}/stage2_lint"
     mkdir -p "$stage_log_dir"
 
-    run_go_agent "$BRANCH_NAME" "false" "$stage_log_dir"
-    run_go_evaluate "$BRANCH_NAME" "stage2"
+    run_agent "$BRANCH_NAME" "false" "$stage_log_dir"
+    local elapsed="$AGENT_ELAPSED"
+    local rc="$AGENT_RC"
+
+    local s1_cost
+    s1_cost=$(echo "$RESULTS_JSON" | jq -r '.stage1.cost_usd // 0') || { log "ERROR: Stage 2 failed to read stage1 cost"; return 1; }
+    local s2_incremental
+    s2_incremental=$(extract_all_stage_costs "$stage_log_dir") || { log "ERROR: Stage 2 cost extraction failed"; return 1; }
+    local total_cost
+    total_cost=$(echo "scale=4; $s1_cost + $s2_incremental" | bc) || { log "ERROR: Stage 2 cost calculation failed"; return 1; }
+
+    log "  Stage 2 incremental cost: \$${s2_incremental} (cumulative: \$${total_cost})"
+
+    run_evaluate "$BRANCH_NAME" "stage2"
+    local eval_time="$EVAL_ELAPSED"
 
     log "  Stage 2 results: ${EVAL_NUM_PASSED}/${EVAL_NUM_TESTS} ($(format_pct "$EVAL_PASS_RATE"))"
 
     RESULTS_JSON=$(echo "$RESULTS_JSON" | jq \
-        --argjson elapsed "$AGENT_ELAPSED" \
-        --argjson eval_time "$EVAL_ELAPSED" \
-        --argjson rc "$AGENT_RC" \
+        --arg name "Lint refine (goimports+staticcheck+govet)" \
+        --argjson elapsed "$elapsed" \
+        --argjson eval_time "$eval_time" \
+        --argjson cost_inc "$s2_incremental" \
+        --argjson cost_cum "$total_cost" \
+        --argjson rc "$rc" \
+        --argjson runtime "${EVAL_RUNTIME:-0.0}" \
         --argjson num_passed "$EVAL_NUM_PASSED" \
         --argjson num_tests "$EVAL_NUM_TESTS" \
         --argjson pass_rate "$EVAL_PASS_RATE" \
         '.stage2 = {
-            name: "Lint refine (goimports+staticcheck+govet)",
+            name: $name,
             elapsed_s: $elapsed,
             eval_time_s: $eval_time,
+            cost_usd_incremental: $cost_inc,
+            cost_usd_cumulative: $cost_cum,
             returncode: $rc,
+            runtime: $runtime,
             num_passed: $num_passed,
             num_tests: $num_tests,
             pass_rate: $pass_rate
         }')
+
     save_results
 }
 
 stage_3_test_refine() {
     log "======================================================================"
-    log "STAGE 3: Refine with Go Test Feedback"
+    log "STAGE 3: Refine with Go Test Feedback (go test -json)"
     log "======================================================================"
 
-    write_go_agent_config "true" "true" "false"
+    local s3_lint="true"
+    if [[ "$NO_STAGE3_LINT" == "true" ]]; then
+        s3_lint="false"
+        log "  Stage 3 lint DISABLED (--no-stage3-lint)"
+    fi
+
+    write_agent_config "true" "$s3_lint" "false" "false" "false" "$USE_SPEC_INFO"
+
     local stage_log_dir="${LOG_BASE}/stage3_tests"
     mkdir -p "$stage_log_dir"
 
-    run_go_agent "$BRANCH_NAME" "false" "$stage_log_dir"
-    run_go_evaluate "$BRANCH_NAME" "stage3"
+    run_agent "$BRANCH_NAME" "false" "$stage_log_dir"
+    local elapsed="$AGENT_ELAPSED"
+    local rc="$AGENT_RC"
+
+    local s2_cumulative
+    s2_cumulative=$(echo "$RESULTS_JSON" | jq -r '.stage2.cost_usd_cumulative // 0') || { log "ERROR: Stage 3 failed to read stage2 cost"; return 1; }
+    local s3_incremental
+    s3_incremental=$(extract_all_stage_costs "$stage_log_dir") || { log "ERROR: Stage 3 cost extraction failed"; return 1; }
+    local total_cost
+    total_cost=$(echo "scale=4; $s2_cumulative + $s3_incremental" | bc) || { log "ERROR: Stage 3 cost calculation failed"; return 1; }
+
+    log "  Stage 3 incremental cost: \$${s3_incremental} (cumulative: \$${total_cost})"
+
+    run_evaluate "$BRANCH_NAME" "stage3"
+    local eval_time="$EVAL_ELAPSED"
 
     log "  Stage 3 results: ${EVAL_NUM_PASSED}/${EVAL_NUM_TESTS} ($(format_pct "$EVAL_PASS_RATE"))"
 
     RESULTS_JSON=$(echo "$RESULTS_JSON" | jq \
-        --argjson elapsed "$AGENT_ELAPSED" \
-        --argjson eval_time "$EVAL_ELAPSED" \
-        --argjson rc "$AGENT_RC" \
+        --arg name "Test refine (go test -json)" \
+        --argjson elapsed "$elapsed" \
+        --argjson eval_time "$eval_time" \
+        --argjson cost_inc "$s3_incremental" \
+        --argjson cost_cum "$total_cost" \
+        --argjson rc "$rc" \
+        --argjson runtime "${EVAL_RUNTIME:-0.0}" \
         --argjson num_passed "$EVAL_NUM_PASSED" \
         --argjson num_tests "$EVAL_NUM_TESTS" \
         --argjson pass_rate "$EVAL_PASS_RATE" \
         '.stage3 = {
-            name: "Test refine (go test -json)",
+            name: $name,
             elapsed_s: $elapsed,
             eval_time_s: $eval_time,
+            cost_usd_incremental: $cost_inc,
+            cost_usd_cumulative: $cost_cum,
             returncode: $rc,
+            runtime: $runtime,
             num_passed: $num_passed,
             num_tests: $num_tests,
             pass_rate: $pass_rate
         }')
+
     save_results
 }
+
+# ============================================================
+# Summary Table
+# ============================================================
 
 print_summary_table() {
     log ""
     log "=========================================================================================="
-    log "GO PIPELINE RESULTS — 3-Stage Pipeline"
-    log "Model: ${MODEL_SHORT} | Dataset: ${DATASET_SHORT} | Branch: ${BRANCH_NAME}"
+    log "RESULTS SUMMARY — Go 3-Stage Pipeline"
+    log "Model: ${MODEL_SHORT} (${MODEL_NAME})"
+    log "Dataset: ${DATASET_SHORT} | Repo Split: ${REPO_SPLIT} | Branch: ${BRANCH_NAME}"
+    log "Cache Prompts: ${CACHE_PROMPTS} | Max Iteration: ${MAX_ITERATION} | Backend: ${BACKEND}"
     log "=========================================================================================="
+    log ""
 
-    printf -v header "%-40s %12s %14s %10s" "Stage" "Pass Rate" "Passed/Total" "Time (s)"
+    printf -v header "%-40s %12s %14s %12s %14s %10s" "Stage" "Pass Rate" "Passed/Total" "Stage Cost" "Cumul. Cost" "Time (s)"
     log "$header"
-    log "------------------------------------------------------------------------------------"
+    log "--------------------------------------------------------------------------------------------------------------"
 
     for stage_key in stage1 stage2 stage3; do
-        local name passed total pass_rate elapsed
+        local name passed total pass_rate stage_cost cumul_cost elapsed
+
         name=$(echo "$RESULTS_JSON" | jq -r ".${stage_key}.name // \"—\"")
         [[ "$name" == "—" ]] && continue
+
         passed=$(echo "$RESULTS_JSON" | jq -r ".${stage_key}.num_passed // 0")
         total=$(echo "$RESULTS_JSON" | jq -r ".${stage_key}.num_tests // 0")
         pass_rate=$(echo "$RESULTS_JSON" | jq -r ".${stage_key}.pass_rate // 0")
         elapsed=$(echo "$RESULTS_JSON" | jq -r ".${stage_key}.elapsed_s // 0")
 
-        printf -v row "%-40s %12s %14s %10s" "$name" "$(format_pct "$pass_rate")" "${passed}/${total}" "$(printf "%.0f" "$elapsed")"
+        if [[ "$stage_key" == "stage1" ]]; then
+            stage_cost=$(echo "$RESULTS_JSON" | jq -r ".${stage_key}.cost_usd // 0")
+            cumul_cost="$stage_cost"
+        else
+            stage_cost=$(echo "$RESULTS_JSON" | jq -r ".${stage_key}.cost_usd_incremental // 0")
+            cumul_cost=$(echo "$RESULTS_JSON" | jq -r ".${stage_key}.cost_usd_cumulative // 0")
+        fi
+
+        local rate_str stage_cost_str cumul_cost_str passed_str elapsed_str
+        rate_str=$(format_pct "$pass_rate")
+        stage_cost_str=$(printf "\$%.2f" "$stage_cost")
+        cumul_cost_str=$(printf "\$%.2f" "$cumul_cost")
+        passed_str="${passed}/${total}"
+        elapsed_str=$(printf "%.0f" "$elapsed")
+
+        printf -v row "%-40s %12s %14s %12s %14s %10s" "$name" "$rate_str" "$passed_str" "$stage_cost_str" "$cumul_cost_str" "$elapsed_str"
         log "$row"
     done
 
-    log "------------------------------------------------------------------------------------"
-    log "Results saved to: ${PIPELINE_LOG}"
+    log "--------------------------------------------------------------------------------------------------------------"
     log ""
 }
 
+# ============================================================
+# Cleanup
+# ============================================================
+
+PIPELINE_SUCCESS="false"
+
 cleanup() {
-    for _si in $(seq 1 "$NUM_SAMPLES"); do
-        set_sample_vars "$_si"
-        rm -f "$COMMIT0_CONFIG" "$AGENT_CONFIG" 2>/dev/null || true
-    done
+    if [[ -n "${AGENT_PID:-}" ]] && kill -0 "$AGENT_PID" 2>/dev/null; then
+        kill -- -"$AGENT_PID" 2>/dev/null || true
+        sleep 2
+        kill -9 -- -"$AGENT_PID" 2>/dev/null || true
+    fi
+
+    if [[ "$PIPELINE_SUCCESS" == "true" ]]; then
+        for _si in $(seq 1 "$NUM_SAMPLES"); do
+            set_sample_vars "$_si"
+            rm -f "$COMMIT0_CONFIG" "$AGENT_CONFIG" 2>/dev/null || true
+        done
+        log "Cleaned up per-run config files"
+    else
+        for _si in $(seq 1 "$NUM_SAMPLES"); do
+            set_sample_vars "$_si"
+            if [[ -f "$COMMIT0_CONFIG" ]] || [[ -f "$AGENT_CONFIG" ]]; then
+                log "Pipeline did not complete successfully. Config files preserved for debugging:"
+                [[ -f "$COMMIT0_CONFIG" ]] && log "  ${COMMIT0_CONFIG}"
+                [[ -f "$AGENT_CONFIG" ]] && log "  ${AGENT_CONFIG}"
+            fi
+        done
+    fi
 }
 trap cleanup EXIT
 trap 'exit' INT TERM
 
-main() {
-    preflight
-    log "Starting Go 3-Stage Pipeline"
-    log "  Model: ${MODEL_SHORT} | Dataset: ${DATASET_SHORT} | Repo: ${REPO_SPLIT}"
+# ============================================================
+# Main
+# ============================================================
 
-    for sample_idx in $(seq 1 "$NUM_SAMPLES"); do
-        set_sample_vars "$sample_idx"
-        mkdir -p "$LOG_BASE"
+declare -a SAMPLE_RESULT_FILES=()
 
+run_single_sample() {
+    local sample_idx="$1"
+
+    set_sample_vars "$sample_idx"
+
+    if [[ "$NUM_SAMPLES" -gt 1 ]]; then
+        log ""
+        log "############################################################"
+        log "# RUN ${sample_idx} of ${NUM_SAMPLES}  (pass@${NUM_SAMPLES})"
+        log "############################################################"
+    fi
+
+    log "======================================================================"
+    log "Commit0 Go 3-Stage Pipeline"
+    log "Model:        ${MODEL_NAME} (${MODEL_SHORT})"
+    log "Dataset:      ${DATASET_FILE} (${DATASET_SHORT})"
+    log "Repo Split:   ${REPO_SPLIT}"
+    log "Branch:       ${BRANCH_NAME}"
+    log "Backend:      ${BACKEND}"
+    log "Cache:        ${CACHE_PROMPTS}"
+    log "Max Iter:     ${MAX_ITERATION}"
+    log "Num Samples:  ${NUM_SAMPLES} (run_${sample_idx})"
+    log "Stage Timeout: ${STAGE_TIMEOUT}s | Eval Timeout: ${EVAL_TIMEOUT}s"
+    log "Inactivity:   ${INACTIVITY_TIMEOUT}s"
+    log "Wall-time cap: ${MAX_WALL_TIME}s"
+    log "Spec Info:    ${USE_SPEC_INFO}"
+    log "Logs:         ${LOG_BASE}"
+    log "Results:      ${PIPELINE_LOG}"
+    log "Start time:   $(ts)"
+    log "======================================================================"
+
+    if [[ "$sample_idx" -eq 1 ]]; then
+        preflight
+    fi
+
+    mkdir -p "$LOG_BASE"
+    write_commit0_config
+
+    if [[ -n "$SKIP_TO_STAGE" ]]; then
+        if [[ ! -f "$PIPELINE_LOG" ]]; then
+            log "ERROR: Cannot skip to stage ${SKIP_TO_STAGE}: no prior results at ${PIPELINE_LOG}"
+            return 1
+        fi
+        RESULTS_JSON=$(cat "$PIPELINE_LOG")
+        local loaded_ok="true"
+        if [[ "$SKIP_TO_STAGE" == "2" ]]; then
+            echo "$RESULTS_JSON" | jq -e '.stage1' >/dev/null 2>&1 || loaded_ok="false"
+            [[ "$loaded_ok" == "false" ]] && { log "ERROR: Prior results missing stage1 data."; return 1; }
+        elif [[ "$SKIP_TO_STAGE" == "3" ]]; then
+            echo "$RESULTS_JSON" | jq -e '.stage1' >/dev/null 2>&1 || loaded_ok="false"
+            echo "$RESULTS_JSON" | jq -e '.stage2' >/dev/null 2>&1 || loaded_ok="false"
+            [[ "$loaded_ok" == "false" ]] && { log "ERROR: Prior results missing stage1/stage2 data."; return 1; }
+        fi
+        log "  Loaded prior results from: ${PIPELINE_LOG}"
+    else
         init_results
-        write_commit0_go_config
+    fi
 
-        run_go_setup
-        run_go_build
+    RESULTS_JSON=$(echo "$RESULTS_JSON" | jq \
+        --argjson sample_idx "$sample_idx" \
+        --argjson num_samples "$NUM_SAMPLES" \
+        '.sample_index = $sample_idx | .num_samples = $num_samples')
 
-        stage_1_draft
-        stage_2_lint_refine
-        stage_3_test_refine
+    local pipeline_error=""
 
-        RESULTS_JSON=$(echo "$RESULTS_JSON" | jq --arg end_time "$(ts)" '. + {end_time: $end_time}')
-        save_results
-        print_summary_table
-    done
+    local skip_stage_1="false"
+    local skip_stage_2="false"
+    if [[ "$SKIP_TO_STAGE" == "2" ]]; then
+        skip_stage_1="true"
+        log "Skipping Stage 1 (--skip-to-stage 2)"
+    elif [[ "$SKIP_TO_STAGE" == "3" ]]; then
+        skip_stage_1="true"
+        skip_stage_2="true"
+        log "Skipping Stage 1 and 2 (--skip-to-stage 3)"
+    fi
 
-    log "Go pipeline complete."
+    if [[ "$skip_stage_1" == "false" ]]; then
+        if ! stage_1_draft; then
+            pipeline_error="Stage 1 failed"
+            log "PIPELINE ERROR: ${pipeline_error}"
+        fi
+    else
+        log "Stage 1: SKIPPED"
+    fi
+
+    if [[ -z "$pipeline_error" ]] && [[ "$skip_stage_2" == "false" ]]; then
+        if ! stage_2_lint_refine; then
+            pipeline_error="Stage 2 failed"
+            log "PIPELINE ERROR: ${pipeline_error}"
+        fi
+    elif [[ "$skip_stage_2" == "true" ]]; then
+        log "Stage 2: SKIPPED"
+    fi
+
+    if [[ -z "$pipeline_error" ]]; then
+        if ! stage_3_test_refine; then
+            pipeline_error="Stage 3 failed"
+            log "PIPELINE ERROR: ${pipeline_error}"
+        fi
+    fi
+
+    if [[ -n "$pipeline_error" ]]; then
+        RESULTS_JSON=$(echo "$RESULTS_JSON" | jq --arg err "$pipeline_error" '.error = $err')
+    fi
+
+    RESULTS_JSON=$(echo "$RESULTS_JSON" | jq --arg end "$(ts)" '.end_time = $end')
+
+    print_summary_table
+    save_results
+    log "run_${sample_idx} results saved to: ${PIPELINE_LOG}"
+
+    SAMPLE_RESULT_FILES+=("$PIPELINE_LOG")
 }
 
+SAMPLES_COMPLETED=0
+
+main() {
+    for sample_idx in $(seq 1 "$NUM_SAMPLES"); do
+        if run_single_sample "$sample_idx"; then
+            SAMPLES_COMPLETED=$((SAMPLES_COMPLETED + 1))
+        else
+            log "WARNING: run_${sample_idx} failed — continuing with remaining samples."
+        fi
+    done
+
+    RUN_ID="${BASE_RUN_ID_FLAT}"
+
+    if [[ "$SAMPLES_COMPLETED" -eq "$NUM_SAMPLES" ]]; then
+        log "Go pipeline complete. All ${NUM_SAMPLES} sample(s) succeeded."
+        PIPELINE_SUCCESS="true"
+    elif [[ "$SAMPLES_COMPLETED" -gt 0 ]]; then
+        log "Go pipeline complete. ${SAMPLES_COMPLETED}/${NUM_SAMPLES} sample(s) succeeded."
+        PIPELINE_SUCCESS="true"
+    else
+        log "Go pipeline FAILED. No samples completed successfully."
+    fi
+}
+
+cd "$BASE_DIR"
 main
