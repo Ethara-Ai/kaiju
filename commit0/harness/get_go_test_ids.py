@@ -1,4 +1,4 @@
-"""Read Go test IDs from *_go.bz2 compressed files."""
+"""Read Go test IDs from *.bz2 compressed files."""
 
 import bz2
 import logging
@@ -30,14 +30,10 @@ def main(repo: str, verbose: int) -> List[List[str]]:
 
     try:
         if "__" in repo:
-            in_file_fail = read(
-                f"{commit0_path}/data/test_ids/{repo}_go#fail_to_pass.bz2"
-            )
-            in_file_pass = read(
-                f"{commit0_path}/data/test_ids/{repo}_go#pass_to_pass.bz2"
-            )
+            in_file_fail = read(f"{commit0_path}/data/test_ids/{repo}#fail_to_pass.bz2")
+            in_file_pass = read(f"{commit0_path}/data/test_ids/{repo}#pass_to_pass.bz2")
         else:
-            in_file_fail = read(f"{commit0_path}/data/test_ids/{repo}_go.bz2")
+            in_file_fail = read(f"{commit0_path}/data/test_ids/{repo}.bz2")
             in_file_pass = ""
     except (OSError, EOFError):
         logger.warning(

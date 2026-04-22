@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -28,6 +29,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
+		runGoimports(filepath.Dir(args[0]))
 		if *jsonOutput {
 			enc := json.NewEncoder(os.Stdout)
 			enc.SetIndent("", "  ")
@@ -49,6 +51,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+
+	runGoimports(dir)
 
 	if *jsonOutput {
 		enc := json.NewEncoder(os.Stdout)
@@ -73,4 +77,37 @@ func isGoSourceFile(path string) bool {
 
 func isDocFile(name string) bool {
 	return name == "doc.go"
+}
+
+func findGoimports() string {
+	if path, err := exec.LookPath("goimports"); err == nil {
+		return path
+	}
+	home, err := os.UserHomeDir()
+	if err == nil {
+		candidate := filepath.Join(home, "go", "bin", "goimports")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	if gopath := os.Getenv("GOPATH"); gopath != "" {
+		candidate := filepath.Join(gopath, "bin", "goimports")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	return "goimports"
+}
+
+func runGoimports(dir string) {
+	if dir == "" {
+		dir = "."
+	}
+	bin := findGoimports()
+	cmd := exec.Command(bin, "-w", dir)
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: goimports failed: %v\n", err)
+	}
 }

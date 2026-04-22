@@ -4,9 +4,9 @@ Clones repos, checks go.mod, src structure, test files,
 optionally runs `go test` in Docker to measure runtime.
 
 Usage:
-    python -m tools.validate_go go_candidates.json --output validated_go.json
-    python -m tools.validate_go go_candidates.json --output validated_go.json --run-tests
-    python -m tools.validate_go --repo sourcegraph/conc --output validated_go.json
+    python -m tools.validate_go go_candidates.json --output validated.json
+    python -m tools.validate_go go_candidates.json --output validated.json --run-tests
+    python -m tools.validate_go --repo sourcegraph/conc --output validated.json
 """
 
 from __future__ import annotations
@@ -156,7 +156,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Validate Go repos for commit0")
     parser.add_argument("candidates", nargs="?", help="Path to go_candidates.json")
     parser.add_argument("--repo", help="Single repo to validate (full_name)")
-    parser.add_argument("--output", default="validated_go.json")
+    parser.add_argument("--output", default="validated.json")
     parser.add_argument("--clone-dir", default=None)
     parser.add_argument("--run-tests", action="store_true")
     args = parser.parse_args()

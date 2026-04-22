@@ -15,19 +15,24 @@ All commands assume you're in the project root and using `.venv/bin/python`.
 .venv/bin/python tools/prepare_repo_go.py \
     --repo sourcegraph/conc \
     --clone-dir ./repos_staging \
-    --output conc_entries_go.json \
+    --output conc_entries.json \
     --org Zahgon
 
 # Create dataset (verify entries first!)
-.venv/bin/python tools/create_dataset_go.py conc_entries_go.json --output conc_go_dataset.json
+.venv/bin/python tools/create_dataset_go.py conc_entries.json --output conc_dataset.json
 
 # Setup + Build + Test IDs
-.venv/bin/python commit0/cli_go.py setup all --dataset-name ./conc_go_dataset.json --dataset-split train
+.venv/bin/python commit0/cli_go.py setup all --dataset-name ./conc_dataset.json --dataset-split train
 .venv/bin/python commit0/cli_go.py build
-.venv/bin/python tools/generate_test_ids_go.py conc_go_dataset.json --docker --install
+.venv/bin/python tools/generate_test_ids_go.py conc_dataset.json --docker --install
+
+# Base Code Compilation verification
+docker run --rm \
+    "commit0.repo.nosurf.<hash>:v0" \
+    bash -c 'cd /testbed && go test -list . -count=1 ./...'
 
 # Run 3-stage pipeline
-bash run_pipeline_go.sh --model opus --dataset ./conc_go_dataset.json --max-iteration 3
+bash run_pipeline_go.sh --model opus --dataset ./conc_dataset.json --max-iteration 3
 ```
 
 ---
@@ -53,7 +58,7 @@ bash run_pipeline_go.sh --model opus --dataset ./conc_go_dataset.json --max-iter
     | (optional)          |  go_version, test file count
     +----------+----------+
                |
-               | validated_go.json
+               | validated.json
                v
     +----------+-----------+
     | tools/prepare_repo_go|
@@ -65,7 +70,7 @@ bash run_pipeline_go.sh --model opus --dataset ./conc_go_dataset.json --max-iter
     |   Generate entries   |
     +----------+-----------+
                |
-               | entries_go.json
+               | entries.json
                v
     +----------+-----------+
     | tools/create_dataset |
@@ -74,7 +79,7 @@ bash run_pipeline_go.sh --model opus --dataset ./conc_go_dataset.json --max-iter
     |   Output dataset.json|
     +----------+-----------+
                |
-               | dataset_go.json
+               | dataset.json
                v
     +----------+-----------+
     | cli_go.py setup      |
@@ -96,7 +101,7 @@ bash run_pipeline_go.sh --model opus --dataset ./conc_go_dataset.json --max-iter
     +----------+-----------+
     | generate_test_ids_go |
     |   go test -list .    |
-    |   Save *_go.bz2     |
+     | Save *.bz2        |
     |   Install to commit0 |
     +----------+-----------+
                |
@@ -140,7 +145,7 @@ bash run_pipeline_go.sh --model opus --dataset ./conc_go_dataset.json --max-iter
                |
                v
     +-----------+-----------+
-    | Results                |  logs/pipeline_go_*.json
+    | Results                |  logs/pipeline_*.json
     |   Per-stage pass rates |  Per-repo agent logs
     |   Costs, timings       |  Docker image tarballs
     +------------------------+
@@ -164,7 +169,7 @@ bash run_pipeline_go.sh --model opus --dataset ./conc_go_dataset.json --max-iter
 | Stub marker | `pass` | `"STUB: not implemented"` (string literal) |
 | Source filter | `*.py`, skip `__init__`, conftest | `*.go`, skip `*_test.go`, `doc.go`, `vendor/` |
 | Test IDs format | `file::class::test` (pytest) | `package/TestName` (go test) |
-| Test ID files | `commit0/data/test_ids/<repo>.bz2` | `commit0/data/test_ids/<repo>_go.bz2` |
+| Test ID files | `commit0/data/test_ids/<repo>.bz2` | `commit0/data/test_ids/<repo>.bz2` |
 | Dependencies | pip_packages, venv, pip install | `go mod download`, `go build ./...` |
 | Multiple images needed | Yes (per Python version) | No (single Go image covers all versions) |
 | Topological sort | Yes (Python import deps) | No (Go has no equivalent) |
@@ -181,7 +186,7 @@ bash run_pipeline_go.sh --model opus --dataset ./conc_go_dataset.json --max-iter
 .venv/bin/python tools/prepare_repo_go.py \
     --repo <OWNER>/<REPO> \
     --clone-dir ./repos_staging \
-    --output <repo>_entries_go.json \
+    --output <repo>_entries.json \
     --org Zahgon
 ```
 
@@ -196,7 +201,7 @@ The gostubber binary:
 - Skips `doc.go`, `vendor/`, `.git/`, `testdata/` directories
 - Replaces function bodies with `_ = "STUB: not implemented"` + appropriate zero-value returns
 
-Output: `<repo>_entries_go.json` with commit SHAs and metadata.
+Output: `<repo>_entries.json` with commit SHAs and metadata.
 
 ### Step 2: Verify and fix entries JSON
 
@@ -212,7 +217,7 @@ Output: `<repo>_entries_go.json` with commit SHAs and metadata.
 
 ```bash
 # Quick sanity check
-cat <repo>_entries_go.json | python -m json.tool | grep -E '"src_dir"|"test_cmd"|"install"|"go_version"'
+cat <repo>_entries.json | python -m json.tool | grep -E '"src_dir"|"test_cmd"|"install"|"go_version"'
 
 # Verify go.mod exists in the repo
 cat repos_staging/<owner>__<repo>/go.mod | head -3
@@ -221,7 +226,7 @@ cat repos_staging/<owner>__<repo>/go.mod | head -3
 ### Step 3: Create the dataset
 
 ```bash
-.venv/bin/python tools/create_dataset_go.py <repo>_entries_go.json --output <repo>_go_dataset.json
+.venv/bin/python tools/create_dataset_go.py <repo>_entries.json --output <repo>_dataset.json
 ```
 
 Validates all entries (required fields, `language == "go"` constraint, commit SHA format) and writes the dataset JSON.
@@ -230,7 +235,7 @@ Validates all entries (required fields, `language == "go"` constraint, commit SH
 
 ```bash
 .venv/bin/python commit0/cli_go.py setup all \
-    --dataset-name ./<repo>_go_dataset.json \
+    --dataset-name ./<repo>_dataset.json \
     --dataset-split train
 ```
 
@@ -251,10 +256,10 @@ The base image is multi-arch (supports arm64 and amd64 via TARGETARCH).
 ### Step 6: Generate and install test IDs
 
 ```bash
-.venv/bin/python tools/generate_test_ids_go.py <repo>_go_dataset.json --docker --install
+.venv/bin/python tools/generate_test_ids_go.py <repo>_dataset.json --docker --install
 ```
 
-Runs `go test -list . -count=1 ./...` at the `reference_commit` inside Docker to discover all test names. Saves them as `commit0/data/test_ids/<repo>_go.bz2` (note the `_go` suffix).
+Runs `go test -list . -count=1 ./...` at the `reference_commit` inside Docker to discover all test names. Saves them as `commit0/data/test_ids/<repo>.bz2`.
 
 Test ID format: `package/TestName` (e.g., `github.com/sourcegraph/conc/pool/TestPool_Go`).
 
@@ -276,8 +281,8 @@ The test count from this validation must match Step 6. If it shows 0 tests, eith
 ```bash
 bash run_pipeline_go.sh \
     --model opus \
-    --dataset ./<repo>_go_dataset.json \
-    --max-iteration 3 2>&1 | tee logs/<repo>_go_run.log
+    --dataset ./<repo>_dataset.json \
+    --max-iteration 3 2>&1 | tee logs/<repo>_run.log
 ```
 
 This runs: Stage 1 (Draft) → Evaluate → Stage 2 (Lint: goimports+staticcheck+go vet) → Evaluate → Stage 3 (Test: go test -json feedback) → Evaluate.
@@ -285,7 +290,7 @@ This runs: Stage 1 (Draft) → Evaluate → Stage 2 (Lint: goimports+staticcheck
 ### Step 9: Check results
 
 ```bash
-cat logs/pipeline_go_*_results.json | python -m json.tool
+cat logs/pipeline_*_results.json | python -m json.tool
 ```
 
 Results include per-stage pass rates, costs, and timing breakdowns.
@@ -417,7 +422,7 @@ Generates Go test ID `.bz2` files.
 |----------|-------------|
 | `collect_test_ids_local(repo_dir, ...)` | Runs `go test -list . -count=1 ./...` locally |
 | `collect_test_ids_docker(repo_name, image_name, reference_commit, timeout)` | Docker SDK-based test discovery |
-| `save_test_ids(test_ids, name, output_dir)` | Saves as `<name>_go.bz2` |
+| `save_test_ids(test_ids, name, output_dir)` | Saves as `<name>.bz2` |
 | `install_test_ids(source_dir, repo_names)` | Copies to `commit0/data/test_ids/` |
 | `generate_for_dataset(dataset_path, output_dir, ...)` | Main orchestrator: iterates entries, collects IDs |
 
@@ -463,7 +468,7 @@ Runs Go static analysis inside Docker.
 
 ### commit0/cli_go.py (~378 lines)
 
-Typer CLI providing all Go subcommands: `setup`, `build`, `test`, `evaluate`, `lint`, `save`, `get_tests`.
+Typer CLI providing all Go subcommands: `setup`, `build`, `test`, `evaluate`, `lint`, `save`, `get-tests`.
 
 ### run_pipeline_go.sh (~566 lines)
 
@@ -492,7 +497,7 @@ Written by `cli_go.py setup`. All Go downstream commands read this file.
 
 ```yaml
 base_dir: repos
-dataset_name: ./conc_go_dataset.json
+dataset_name: ./conc_dataset.json
 dataset_split: test
 repo_split: conc_go
 ```
@@ -622,13 +627,13 @@ docker buildx build \
 **Symptom**: `run_pipeline_go.sh` exits with "Error: Cannot resolve dataset 'X'".
 
 **Cause**: The `--dataset` value must be one of:
-1. A path to a `.json` file (e.g., `./conc_go_dataset.json`)
-2. A path containing `/` that resolves to a file (e.g., `datasets/conc_go.json`)
+1. A path to a `.json` file (e.g., `./conc_dataset.json`)
+2. A path containing `/` that resolves to a file (e.g., `datasets/conc.json`)
 3. A `GO_SPLIT` key exactly (currently: `conc_go` or `Zahgon/conc`)
 
 **Fix**: Pass the full path to your dataset JSON:
 ```bash
-bash run_pipeline_go.sh --model opus --dataset ./conc_go_dataset.json
+bash run_pipeline_go.sh --model opus --dataset ./conc_dataset.json
 ```
 
 ### HuggingFace dataset not found (404)
@@ -641,7 +646,7 @@ bash run_pipeline_go.sh --model opus --dataset ./conc_go_dataset.json
 
 ### 0 test IDs collected
 
-**Symptom**: `generate_test_ids_go.py` reports 0 tests or the `*_go.bz2` file is empty.
+**Symptom**: `generate_test_ids_go.py` reports 0 tests or the `.bz2` file is empty.
 
 **Causes and fixes**:
 
@@ -702,7 +707,7 @@ Before running the pipeline, verify each item:
 - [ ] `test_cmd` defaults to `"go test -json -count=1 ./..."` — override only if needed
 - [ ] No `vendor/` directory committed (or add `"go mod vendor"` to pre_install)
 - [ ] No CGO deps without `pre_install` apt packages
-- [ ] Test IDs file is non-empty: `bzcat commit0/data/test_ids/<repo>_go.bz2 | wc -l`
+- [ ] Test IDs file is non-empty: `bzcat commit0/data/test_ids/<repo>.bz2 | wc -l`
 - [ ] Stubbed code still compiles: `go build ./...` inside Docker shows no errors
 - [ ] Docker image exists: `docker images | grep commit0.base.go`
 - [ ] `.commit0.go.yaml` exists and points to the correct dataset JSON
@@ -739,25 +744,25 @@ This section documents a complete run against `sourcegraph/conc`, a Go concurren
 .venv/bin/python tools/prepare_repo_go.py \
     --repo sourcegraph/conc \
     --clone-dir ./repos_staging \
-    --output conc_entries_go.json \
+    --output conc_entries.json \
     --org Zahgon
 
 # 2. Verify entries (check src_dir, test_cmd, install)
-cat conc_entries_go.json | python -m json.tool
+cat conc_entries.json | python -m json.tool
 
 # 3. Create dataset
-.venv/bin/python tools/create_dataset_go.py conc_entries_go.json \
-    --output conc_go_dataset.json
+.venv/bin/python tools/create_dataset_go.py conc_entries.json \
+    --output conc_dataset.json
 
 # 4. Setup
 .venv/bin/python commit0/cli_go.py setup all \
-    --dataset-name ./conc_go_dataset.json --dataset-split train
+    --dataset-name ./conc_dataset.json --dataset-split train
 
 # 5. Build
 .venv/bin/python commit0/cli_go.py build
 
 # 6. Test IDs
-.venv/bin/python tools/generate_test_ids_go.py conc_go_dataset.json \
+.venv/bin/python tools/generate_test_ids_go.py conc_dataset.json \
     --docker --install
 
 # 7. Validate
@@ -768,8 +773,8 @@ docker run --rm \
 # 8. Run pipeline
 bash run_pipeline_go.sh \
     --model opus \
-    --dataset ./conc_go_dataset.json \
-    --max-iteration 3 2>&1 | tee logs/opus_conc_go.log
+    --dataset ./conc_dataset.json \
+    --max-iteration 3 2>&1 | tee logs/opus_conc.log
 ```
 
 ### Expected dataset JSON
@@ -804,13 +809,13 @@ bash run_pipeline_go.sh \
 
 | What | Path |
 |------|------|
-| Entries JSON | `conc_entries_go.json` |
-| Dataset JSON | `conc_go_dataset.json` |
-| Results JSON | `logs/pipeline_go_*_results.json` |
-| Pipeline log | `logs/opus_conc_go.log` |
-| Stage logs | `logs/agent_go/conc/opus4.6/run_1/stage{1,2,3}_*/` |
-| Test IDs | `commit0/data/test_ids/conc_go.bz2` |
+| Entries JSON | `conc_entries.json` |
+| Dataset JSON | `conc_dataset.json` |
+| Results JSON | `logs/pipeline_*_results.json` |
+| Pipeline log | `logs/opus_conc.log` |
+| Stage logs | `logs/agent/conc_dataset/opus4.6/run_1/stage{1,2,3}_*/` |
+| Test IDs | `commit0/data/test_ids/conc.bz2` |
 | Staged repo | `repos_staging/sourcegraph__conc/` |
 | Working repo | `repos/conc/` |
 | Commit0 config | `.commit0.go.yaml` |
-| Agent config | `.agent_go_*.yaml` (per-run, auto-cleaned) |
+| Agent config | `.agent_*.yaml` (per-run, auto-cleaned) |

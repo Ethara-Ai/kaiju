@@ -217,19 +217,15 @@ def get_target_edit_files_from_patch(
     return files
 
 
+_CLI_GO_PATH = str(Path(__file__).resolve().parent.parent / "commit0" / "cli_go.py")
+
+
 def get_go_lint_cmd(
-    dataset_name: str,
-    dataset_split: str,
     repo: str,
-    base_dir: str,
+    commit0_config_file: str,
 ) -> str:
-    """Generate the Go lint command string."""
     return (
-        f"python commit0/cli_go.py lint "
-        f"--dataset-name {dataset_name} "
-        f"--dataset-split {dataset_split} "
-        f"--repo-or-repo-dir {repo} "
-        f"--base-dir {base_dir}"
+        f"python {_CLI_GO_PATH} lint {repo} --commit0-config-file {commit0_config_file}"
     )
 
 
@@ -237,9 +233,7 @@ def get_go_message(
     agent_config: AgentConfig,
     repo_path: str,
     test_files: list[str],
-    dataset_name: str = "",
-    dataset_split: str = "",
-    base_dir: str = "",
+    commit0_config_file: str = ".commit0.go.yaml",
 ) -> str:
     """Build the agent message/prompt for Go repos.
 
@@ -298,10 +292,10 @@ def get_go_message(
         parts.append("\n".join(test_info_parts))
         parts.append("")
 
-    if agent_config.use_lint_info and dataset_name:
+    if agent_config.use_lint_info and commit0_config_file:
         parts.append(LINT_INFO_HEADER)
         repo_name = os.path.basename(repo_path)
-        lint_cmd = get_go_lint_cmd(dataset_name, dataset_split, repo_name, base_dir)
+        lint_cmd = get_go_lint_cmd(repo_name, commit0_config_file)
         try:
             result = subprocess.run(
                 lint_cmd.split(),

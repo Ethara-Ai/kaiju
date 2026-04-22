@@ -262,10 +262,10 @@ set_sample_vars() {
         BRANCH_NAME="${BASE_BRANCH_NAME}-run_${sample_idx}"
         RUN_ID="${BASE_RUN_ID_FLAT}_run_${sample_idx}"
     fi
-    LOG_BASE="${BASE_DIR}/logs/agent_go/${DATASET_DIR_NAME}/${MODEL_DIR_NAME}/run_${sample_idx}"
-    PIPELINE_LOG="${BASE_DIR}/logs/pipeline_go_${RUN_ID}_results.json"
-    COMMIT0_CONFIG="${BASE_DIR}/.commit0_go_${RUN_ID}.yaml"
-    AGENT_CONFIG="${BASE_DIR}/.agent_go_${RUN_ID}.yaml"
+    LOG_BASE="${BASE_DIR}/logs/agent/${DATASET_DIR_NAME}/${MODEL_DIR_NAME}/run_${sample_idx}"
+    PIPELINE_LOG="${BASE_DIR}/logs/pipeline_${RUN_ID}_results.json"
+    COMMIT0_CONFIG="${BASE_DIR}/.commit0_${RUN_ID}.yaml"
+    AGENT_CONFIG="${BASE_DIR}/.agent_${RUN_ID}.yaml"
 }
 
 set_sample_vars 1

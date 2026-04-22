@@ -258,8 +258,8 @@ def main(
                 total_duration += dur
                 per_test_results.append((tid, status, dur))
             else:
-                status_counter["FAILED"] += 1
-                per_test_results.append((tid, "FAILED", 0.0))
+                status_counter["ERROR"] += 1
+                per_test_results.append((tid, "ERROR", 0.0))
 
         print(f"\n--- {repo_label}: Individual Test Results ---")
         for tid, status, dur in sorted(per_test_results, key=lambda x: x[1]):

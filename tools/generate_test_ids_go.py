@@ -6,10 +6,10 @@ then saves them as bz2-compressed files compatible with commit0's Go evaluation 
 Test IDs use the format: package/TestName (e.g., "github.com/foo/bar/pkg/TestSomething").
 
 Usage:
-    python -m tools.generate_test_ids_go dataset_entries_go.json --output-dir ./test_ids
+    python -m tools.generate_test_ids_go dataset_entries.json --output-dir ./test_ids
     python -m tools.generate_test_ids_go --repo-dir /path/to/repo --name mylib --output-dir ./test_ids
-    python -m tools.generate_test_ids_go dataset_entries_go.json --docker --output-dir ./test_ids
-    python -m tools.generate_test_ids_go dataset_entries_go.json --install
+    python -m tools.generate_test_ids_go dataset_entries.json --docker --output-dir ./test_ids
+    python -m tools.generate_test_ids_go dataset_entries.json --install
 
 Requires:
     - Go toolchain installed (for local collection)
@@ -253,7 +253,7 @@ def save_test_ids(
 ) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     name = name.lower().replace(".", "-")
-    output_file = output_dir / f"{name}_go.bz2"
+    output_file = output_dir / f"{name}.bz2"
 
     content = "\n".join(test_ids)
     with bz2.open(output_file, "wt") as f:
@@ -277,7 +277,7 @@ def install_test_ids(
     data_dir.mkdir(parents=True, exist_ok=True)
     installed = 0
 
-    for bz2_file in sorted(source_dir.glob("*_go.bz2")):
+    for bz2_file in sorted(source_dir.glob("*.bz2")):
         name = bz2_file.stem
         if repo_names and name not in [r.lower().replace(".", "-") for r in repo_names]:
             continue
@@ -384,7 +384,7 @@ def main() -> None:
     parser.add_argument(
         "input_file",
         nargs="?",
-        help="Input dataset_entries_go.json",
+        help="Input dataset_entries.json",
     )
     parser.add_argument(
         "--repo-dir",

@@ -17,7 +17,6 @@ import yaml
 from pathlib import Path
 from typing import Optional, cast
 from types import TracebackType
-from datetime import datetime
 
 import git
 
@@ -34,7 +33,7 @@ from agent.class_types import AgentConfig
 from agent.display import TerminalDisplay
 from agent.thinking_capture import ThinkingCapture
 from agent.trajectory_writer import write_trajectory_md
-from agent.output_writer import write_output_jsonl, extract_git_patch, build_metadata
+from agent.output_writer import extract_git_patch, build_metadata
 from agent.openhands_formatter import write_module_output_json
 from commit0.harness.constants import RepoInstance
 from commit0.harness.constants_go import (
@@ -47,7 +46,9 @@ from commit0.harness.utils import load_dataset_from_config
 
 logger = logging.getLogger(__name__)
 
-RUN_AGENT_LOG_DIR = Path("logs/agent_go")
+_CLI_GO_PATH = str(Path(__file__).resolve().parent.parent / "commit0" / "cli_go.py")
+
+RUN_AGENT_LOG_DIR = Path("logs/agent")
 
 
 def _read_commit0_go_config(config_file: str) -> dict:
@@ -84,7 +85,7 @@ def _mark_module_done(log_dir: Path) -> None:
 def run_eval_after_each_commit(
     branch: str, backend: str, commit0_config_file: str
 ) -> str:
-    eval_cmd = f"{sys.executable} commit0/cli_go.py evaluate --branch {branch} --backend {backend} --commit0-config-file {commit0_config_file} --timeout 100"
+    eval_cmd = f"{sys.executable} {_CLI_GO_PATH} evaluate --branch {branch} --backend {backend} --commit0-config-file {commit0_config_file} --timeout 100"
     try:
         result = subprocess.run(
             eval_cmd.split(), capture_output=True, text=True, check=True
@@ -158,12 +159,7 @@ def run_agent_for_repo(
 
     test_files_str = [xx for x in get_go_test_ids(repo_name, verbose=0) for xx in x]
 
-    experiment_log_dir = (
-        Path(log_dir)
-        / repo_name
-        / branch
-        / datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    )
+    experiment_log_dir = Path(log_dir) / repo_name / branch / "current"
     experiment_log_dir.mkdir(parents=True, exist_ok=True)
 
     eval_results = {}
@@ -171,7 +167,7 @@ def run_agent_for_repo(
     if agent_config.capture_thinking:
         thinking_capture = ThinkingCapture()
 
-    agent_config_log_file = experiment_log_dir / ".agent.go.yaml"
+    agent_config_log_file = experiment_log_dir / ".agent.yaml"
     try:
         with open(agent_config_log_file, "w") as acf:
             yaml.dump(agent_config, acf)
@@ -186,7 +182,7 @@ def run_agent_for_repo(
                 if not test_id.strip():
                     continue
                 update_queue.put(("set_current_file", (repo_name, test_id)))
-                test_cmd = f"{sys.executable} commit0/cli_go.py test {repo_path} {test_id} --branch {branch} --backend {backend} --commit0-config-file {commit0_config_file} --timeout 100"
+                test_cmd = f"{sys.executable} {_CLI_GO_PATH} test {repo_path} {test_id} --branch {branch} --backend {backend} --commit0-config-file {commit0_config_file} --timeout 100"
                 short_test_id = (
                     test_id.rsplit("/", 1)[-1] if "/" in test_id else test_id
                 )
@@ -197,14 +193,8 @@ def run_agent_for_repo(
                     continue
                 lint_cmd = (
                     get_go_lint_cmd(
-                        _read_commit0_go_config(commit0_config_file).get(
-                            "dataset_name", ""
-                        ),
-                        _read_commit0_go_config(commit0_config_file).get(
-                            "dataset_split", "test"
-                        ),
                         repo_name,
-                        repo_base_dir,
+                        commit0_config_file,
                     )
                     if agent_config.use_lint_info
                     else ""
@@ -213,6 +203,7 @@ def run_agent_for_repo(
                     agent_config,
                     repo_path,
                     test_files,
+                    commit0_config_file=commit0_config_file,
                 )
 
                 agent_return = agent.run(
@@ -243,12 +234,8 @@ def run_agent_for_repo(
                 _mark_module_done(test_log_dir)
         elif agent_config.run_entire_dir_lint:
             lint_cmd = get_go_lint_cmd(
-                _read_commit0_go_config(commit0_config_file).get("dataset_name", ""),
-                _read_commit0_go_config(commit0_config_file).get(
-                    "dataset_split", "test"
-                ),
                 repo_name,
-                repo_base_dir,
+                commit0_config_file,
             )
             update_queue.put(("start_repo", (repo_name, len(target_edit_files_rel))))
             for edit_file, edit_file_rel in zip(
@@ -292,6 +279,7 @@ def run_agent_for_repo(
                 agent_config,
                 repo_path,
                 test_files,
+                commit0_config_file=commit0_config_file,
             )
 
             update_queue.put(("start_repo", (repo_name, len(target_edit_files_rel))))
@@ -304,14 +292,8 @@ def run_agent_for_repo(
                     continue
                 lint_cmd = (
                     get_go_lint_cmd(
-                        _read_commit0_go_config(commit0_config_file).get(
-                            "dataset_name", ""
-                        ),
-                        _read_commit0_go_config(commit0_config_file).get(
-                            "dataset_split", "test"
-                        ),
                         repo_name,
-                        repo_base_dir,
+                        commit0_config_file,
                     )
                     if agent_config.use_lint_info
                     else ""
@@ -362,52 +344,38 @@ def run_agent_for_repo(
             except Exception as e:
                 logger.warning("Failed to write trajectory.md: %s", e)
 
-        if agent_config.output_jsonl:
-            git_patch = extract_git_patch(repo_path, example.get("base_commit", "HEAD"))
-            metadata = build_metadata(
-                dataset_path=commit0_config_file,
-                max_iterations=agent_config.max_iteration,
-                model_short=getattr(
-                    agent_config, "model_short", agent_config.model_name
-                ),
-            )
+        git_patch = extract_git_patch(repo_path, example.get("base_commit", "HEAD"))
+        metadata = build_metadata(
+            dataset_path=commit0_config_file,
+            max_iterations=agent_config.max_iteration,
+            model_short=getattr(agent_config, "model_short", agent_config.model_name),
+        )
+
+        modules_seen: set[str] = set()
+        for turn in thinking_capture.turns:
+            if turn.module and turn.module not in modules_seen:
+                modules_seen.add(turn.module)
+        for module_name in modules_seen:
+            module_turns = thinking_capture.get_module_turns(module_name)
+            module_metrics = thinking_capture.get_module_metrics(module_name)
+            stage = module_turns[0].stage if module_turns else "unknown"
+            module_log_dir = experiment_log_dir / module_name
             try:
-                write_output_jsonl(
-                    output_path=experiment_log_dir / "output.jsonl",
+                write_module_output_json(
+                    output_dir=str(module_log_dir),
+                    module_turns=module_turns,
+                    module=module_name,
                     instance_id=example.get("instance_id", repo_name),
-                    instruction="",
                     git_patch=git_patch,
-                    events=thinking_capture.to_history(),
-                    metrics=thinking_capture.get_metrics(),
+                    instruction="",
                     metadata=metadata,
+                    metrics=module_metrics,
+                    stage=stage,
                 )
             except Exception as e:
-                logger.warning("Failed to write output.jsonl: %s", e)
-
-            modules_seen: set[str] = set()
-            for turn in thinking_capture.turns:
-                if turn.module and turn.module not in modules_seen:
-                    modules_seen.add(turn.module)
-            for module_name in modules_seen:
-                module_turns = thinking_capture.get_module_turns(module_name)
-                module_metrics = thinking_capture.get_module_metrics(module_name)
-                stage = module_turns[0].stage if module_turns else "unknown"
-                try:
-                    write_module_output_json(
-                        output_dir=str(experiment_log_dir),
-                        module_turns=module_turns,
-                        module=module_name,
-                        instance_id=example.get("instance_id", repo_name),
-                        git_patch=git_patch,
-                        instruction="",
-                        metadata=metadata,
-                        metrics=module_metrics,
-                        stage=stage,
-                    )
-                except Exception as e:
-                    logger.warning(
-                        "Failed to write module output JSON for %s: %s", module_name, e
-                    )
+                logger.warning(
+                    "Failed to write module output JSON for %s: %s", module_name, e
+                )
 
     update_queue.put(("finish_repo", repo_name))
 

@@ -10,9 +10,9 @@ For each validated Go candidate:
 7. Output dataset entries (GoRepoInstance-compatible)
 
 Usage:
-    python -m tools.prepare_repo_go validated_go.json --output dataset_entries_go.json
-    python -m tools.prepare_repo_go --repo sourcegraph/conc --clone-dir ./repos_staging --output dataset_entries_go.json
-    python -m tools.prepare_repo_go validated_go.json --dry-run --output dataset_entries_go.json
+    python -m tools.prepare_repo_go validated.json --output dataset_entries.json
+    python -m tools.prepare_repo_go --repo sourcegraph/conc --clone-dir ./repos_staging --output dataset_entries.json
+    python -m tools.prepare_repo_go validated.json --dry-run --output dataset_entries.json
 
 Requires:
     - GITHUB_TOKEN env var with repo/fork permissions
@@ -39,6 +39,29 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_ORG = "Zahgon"
 TOOLS_DIR = Path(__file__).parent
+
+
+def _find_goimports() -> str:
+    """Find goimports binary, checking PATH and common Go install locations."""
+    path = shutil.which("goimports")
+    if path:
+        return path
+    for candidate in [
+        Path.home() / "go" / "bin" / "goimports",
+        Path(os.environ.get("GOPATH", "")) / "bin" / "goimports"
+        if os.environ.get("GOPATH")
+        else None,
+        Path(os.environ.get("GOROOT", "")) / "bin" / "goimports"
+        if os.environ.get("GOROOT")
+        else None,
+    ]:
+        if candidate and candidate.is_file():
+            return str(candidate)
+    raise FileNotFoundError(
+        "goimports not found. Install with: go install golang.org/x/tools/cmd/goimports@latest "
+        "and ensure ~/go/bin is on PATH, or set GOPATH."
+    )
+
 
 sys.path.insert(0, str(TOOLS_DIR.parent))
 from tools.stub_go import _ensure_gostubber, stub_go_repo
@@ -226,6 +249,16 @@ def create_stubbed_branch(
         if result.returncode == 0:
             stubbed_count += 1
     logger.info("  Stubbed %d Go files", stubbed_count)
+
+    logger.info("  Running goimports to clean unused imports...")
+    goimports_bin = _find_goimports()
+    subprocess.run(
+        [goimports_bin, "-w", "."],
+        cwd=repo_dir,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
 
     git(repo_dir, "add", "-A")
 
@@ -512,7 +545,7 @@ def main() -> None:
     parser.add_argument(
         "input_file",
         nargs="?",
-        help="Input validated_go.json from validate_go.py",
+        help="Input validated.json from validate_go.py",
     )
     parser.add_argument("--repo", type=str, help="Single repo to prepare (owner/name)")
     parser.add_argument(
@@ -524,8 +557,8 @@ def main() -> None:
     parser.add_argument(
         "--output",
         type=str,
-        default="dataset_entries_go.json",
-        help="Output JSON file (default: dataset_entries_go.json)",
+        default="dataset_entries.json",
+        help="Output JSON file (default: dataset_entries.json)",
     )
     parser.add_argument(
         "--org",

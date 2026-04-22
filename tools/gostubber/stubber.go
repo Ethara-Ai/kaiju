@@ -143,11 +143,13 @@ func isInitOrMain(fn *ast.FuncDecl) bool {
 func buildStubBody(fn *ast.FuncDecl) *ast.BlockStmt {
 	stmts := []ast.Stmt{}
 
-	markerStmt := &ast.ExprStmt{
-		X: &ast.BasicLit{
+	markerStmt := &ast.AssignStmt{
+		Lhs: []ast.Expr{&ast.Ident{Name: "_"}},
+		Tok: token.ASSIGN,
+		Rhs: []ast.Expr{&ast.BasicLit{
 			Kind:  token.STRING,
 			Value: stubMarker,
-		},
+		}},
 	}
 	stmts = append(stmts, markerStmt)
 
@@ -172,6 +174,15 @@ func buildStubBody(fn *ast.FuncDecl) *ast.BlockStmt {
 	return &ast.BlockStmt{List: stmts}
 }
 
+func derefNew(t ast.Expr) ast.Expr {
+	return &ast.StarExpr{
+		X: &ast.CallExpr{
+			Fun:  &ast.Ident{Name: "new"},
+			Args: []ast.Expr{t},
+		},
+	}
+}
+
 func zeroValueExpr(expr ast.Expr) ast.Expr {
 	switch t := expr.(type) {
 	case *ast.Ident:
@@ -188,7 +199,7 @@ func zeroValueExpr(expr ast.Expr) ast.Expr {
 		case "error":
 			return &ast.Ident{Name: "nil"}
 		default:
-			return &ast.CompositeLit{Type: t}
+			return derefNew(t)
 		}
 	case *ast.StarExpr:
 		return &ast.Ident{Name: "nil"}
@@ -205,7 +216,7 @@ func zeroValueExpr(expr ast.Expr) ast.Expr {
 	case *ast.InterfaceType:
 		return &ast.Ident{Name: "nil"}
 	case *ast.SelectorExpr:
-		return &ast.CompositeLit{Type: t}
+		return derefNew(t)
 	case *ast.IndexExpr:
 		return &ast.Ident{Name: "nil"}
 	case *ast.IndexListExpr:

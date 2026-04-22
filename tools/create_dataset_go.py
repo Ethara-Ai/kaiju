@@ -1,15 +1,15 @@
 """Create a HuggingFace dataset from prepared Go repo entries.
 
-Takes output of prepare_repo_go.py (dataset_entries_go.json) and:
+Takes output of prepare_repo_go.py (dataset_entries.json) and:
 1. Validates entries match GoRepoInstance schema
 2. Adds entries to GO_SPLIT constants
 3. Uploads to HuggingFace (optional)
 4. Generates commit0 config files (.commit0.go.yaml)
 
 Usage:
-    python -m tools.create_dataset_go dataset_entries_go.json --output custom_go_dataset.json
-    python -m tools.create_dataset_go dataset_entries_go.json --upload --hf-repo Ethara-Ai/commit0_go
-    python -m tools.create_dataset_go dataset_entries_go.json --patch-constants
+    python -m tools.create_dataset_go dataset_entries.json --output custom_dataset.json
+    python -m tools.create_dataset_go dataset_entries.json --upload --hf-repo Ethara-Ai/commit0_go
+    python -m tools.create_dataset_go dataset_entries.json --patch-constants
 """
 
 from __future__ import annotations
@@ -196,19 +196,19 @@ def main() -> None:
     )
     parser.add_argument(
         "entries_file",
-        help="Input dataset_entries_go.json from prepare_repo_go.py",
+        help="Input dataset_entries.json from prepare_repo_go.py",
     )
     parser.add_argument(
         "--output",
         type=str,
-        default="custom_go_dataset.json",
-        help="Output dataset JSON file (default: custom_go_dataset.json)",
+        default="custom_dataset.json",
+        help="Output dataset JSON file (default: custom_dataset.json)",
     )
     parser.add_argument(
         "--split-name",
         type=str,
-        default="custom_go",
-        help="Name for the GO_SPLIT constant (default: custom_go)",
+        default="custom",
+        help="Name for the GO_SPLIT constant (default: custom)",
     )
     parser.add_argument(
         "--upload",

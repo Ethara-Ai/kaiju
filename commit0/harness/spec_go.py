@@ -52,10 +52,10 @@ class Commit0GoSpec(Spec):
         pre_install = setup.get("pre_install")
 
         setup_commands = [
-            f"git clone --depth 1 -o origin https://github.com/{repo} {self.repo_directory}",
+            f"git clone -o origin https://github.com/{repo} {self.repo_directory}",
             f"chmod -R 777 {self.repo_directory}",
             f"cd {self.repo_directory}",
-            f"git fetch --depth 1 origin {env_setup_commit} {base_commit}",
+            f"git fetch origin {env_setup_commit} {base_commit}",
             f"git reset --hard {env_setup_commit}",
             "git submodule update --init --recursive 2>/dev/null || true",
             "git remote remove origin",
@@ -85,7 +85,16 @@ class Commit0GoSpec(Spec):
         eval_script_list = [
             f"cd {self.repo_directory}",
             f"git reset --hard {self.instance['base_commit']}",
-            f"git apply -v --allow-empty {diff_path}",
+            # Apply patch: skip if empty, abort eval if non-empty patch fails
+            f"if [ -s {diff_path} ]; then",
+            f"  git apply -v {diff_path}",
+            "  if [ $? -ne 0 ]; then",
+            '    echo \'{"Action":"fail","Package":"PATCH_APPLY_FAILED","Output":"git apply failed"}\'  > test_output.json',
+            '    echo "git apply failed" > test_stderr.txt',
+            "    echo 1 > go_test_exit_code.txt",
+            f"    exit 0",
+            "  fi",
+            "fi",
             "goimports -w .",
             "git status",
             f"{test_cmd} > test_output.json 2> test_stderr.txt",
