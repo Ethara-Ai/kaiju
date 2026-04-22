@@ -104,12 +104,12 @@ func (s *Stubber) stubFile(path string) (*FileResult, error) {
 			continue
 		}
 
-		if !fn.Name.IsExported() {
+		if isInitOrMain(fn) {
 			result.Skipped++
 			continue
 		}
 
-		if isInitOrMain(fn) {
+		if isAlreadyStubbed(fn.Body) {
 			result.Skipped++
 			continue
 		}
@@ -138,6 +138,22 @@ func (s *Stubber) stubFile(path string) (*FileResult, error) {
 func isInitOrMain(fn *ast.FuncDecl) bool {
 	name := fn.Name.Name
 	return name == "init" || name == "main"
+}
+
+func isAlreadyStubbed(body *ast.BlockStmt) bool {
+	for _, stmt := range body.List {
+		assign, ok := stmt.(*ast.AssignStmt)
+		if !ok {
+			continue
+		}
+		for _, rhs := range assign.Rhs {
+			lit, ok := rhs.(*ast.BasicLit)
+			if ok && lit.Kind == token.STRING && lit.Value == stubMarker {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func buildStubBody(fn *ast.FuncDecl) *ast.BlockStmt {
