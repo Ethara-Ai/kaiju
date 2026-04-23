@@ -125,13 +125,18 @@ def fork_repo(full_name: str, org: str) -> str:
         pass
 
     logger.info("  Forking %s to %s...", full_name, org)
-    subprocess.run(
+    fork_result = subprocess.run(
         ["gh", "repo", "fork", full_name, "--org", org, "--clone=false"],
         capture_output=True,
         text=True,
         timeout=60,
-        check=True,
     )
+    if fork_result.returncode != 0:
+        raise RuntimeError(
+            f"gh repo fork failed (exit {fork_result.returncode}) for {full_name} -> {org}.\n"
+            f"stdout: {fork_result.stdout.strip()}\n"
+            f"stderr: {fork_result.stderr.strip()}"
+        )
 
     for _ in range(10):
         try:
