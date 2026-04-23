@@ -250,7 +250,13 @@ def main(
         per_test_results: list[tuple[str, str, float]] = []
         for tid in test_ids_flat:
             if tid in results:
-                status = results[tid].value
+                raw_status = results[tid].value
+                # Map to Python-compatible statuses: PASSED, FAILED, SKIPPED
+                # Parser ERROR (orphaned/crashed tests) → FAILED for eval parity
+                if raw_status in ("PASSED", "SKIPPED"):
+                    status = raw_status
+                else:
+                    status = "FAILED"
                 status_counter[status] += 1
                 if status == "PASSED":
                     num_passed += 1
@@ -258,8 +264,8 @@ def main(
                 total_duration += dur
                 per_test_results.append((tid, status, dur))
             else:
-                status_counter["ERROR"] += 1
-                per_test_results.append((tid, "ERROR", 0.0))
+                status_counter["FAILED"] += 1
+                per_test_results.append((tid, "FAILED", 0.0))
 
         print(f"\n--- {repo_label}: Individual Test Results ---")
         for tid, status, dur in sorted(per_test_results, key=lambda x: x[1]):
