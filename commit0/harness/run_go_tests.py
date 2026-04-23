@@ -33,6 +33,39 @@ from commit0.harness.execution_context import (
 )
 
 
+def _extract_build_errors(raw_json_output: str, max_length: int = 4000) -> str:
+    """Extract Go compilation errors from go test -json output."""
+    import json as _json
+
+    errors = []
+    for line in raw_json_output.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = _json.loads(line)
+        except _json.JSONDecodeError:
+            continue
+        action = event.get("Action")
+        output = event.get("Output", "")
+        if action in ("output", "build-output") and output.strip():
+            text = output.strip()
+            if (
+                ".go:" in text
+                or "build failed" in text.lower()
+                or "cannot " in text
+                or "undefined:" in text
+                or "imported and not used" in text
+                or "redeclared" in text
+                or "syntax error" in text
+            ):
+                errors.append(text)
+    result = "\n".join(errors)
+    if len(result) > max_length:
+        result = result[:max_length] + "\n... (truncated)"
+    return result
+
+
 def main(
     dataset_name: str,
     dataset_split: str,
@@ -201,6 +234,11 @@ def main(
                     f"Go test results: {passed} passed, {failed} failed, "
                     f"{skipped} skipped out of {len(results)} tests"
                 )
+
+                if len(results) == 0:
+                    build_errors = _extract_build_errors(raw)
+                    if build_errors:
+                        print(f"\nBuild errors (compilation failed):\n{build_errors}")
 
         go_exit_code_file = Path(log_dir / "go_test_exit_code.txt")
         _module_logger.debug("Reading go test exit code from %s", go_exit_code_file)

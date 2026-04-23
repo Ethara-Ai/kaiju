@@ -138,7 +138,10 @@ def setup(
     """Clone Go repositories for a given split."""
     if repo_split != "all":
         merged = resolve_go_split(dataset_name, dataset_split)
-        check_valid(repo_split, list(merged.keys()) + resolve_go_split_all(dataset_name, dataset_split))
+        check_valid(
+            repo_split,
+            list(merged.keys()) + resolve_go_split_all(dataset_name, dataset_split),
+        )
 
     base_dir = str(Path(base_dir).resolve())
     if dataset_name.endswith(".json"):
@@ -197,7 +200,8 @@ def build(
         merged = resolve_go_split(config["dataset_name"], config["dataset_split"])
         check_valid(
             config["repo_split"],
-            list(merged.keys()) + resolve_go_split_all(config["dataset_name"], config["dataset_split"]),
+            list(merged.keys())
+            + resolve_go_split_all(config["dataset_name"], config["dataset_split"]),
         )
 
     typer.echo(
@@ -262,7 +266,8 @@ def test(
     merged = resolve_go_split(config["dataset_name"], config["dataset_split"])
     check_valid(
         repo_or_repo_path.split("/")[-1],
-        list(merged.keys()) + resolve_go_split_all(config["dataset_name"], config["dataset_split"]),
+        list(merged.keys())
+        + resolve_go_split_all(config["dataset_name"], config["dataset_split"]),
     )
 
     if reference:
@@ -282,7 +287,7 @@ def test(
         typer.echo(f"Branch: {branch}")
         typer.echo(f"Test IDs: {test_ids}")
 
-    commit0.harness.run_go_tests.main(
+    exit_code = commit0.harness.run_go_tests.main(
         config["dataset_name"],
         config["dataset_split"],
         config["base_dir"],
@@ -295,6 +300,8 @@ def test(
         rebuild,
         verbose,
     )
+    if exit_code:
+        raise typer.Exit(code=exit_code)
 
 
 @commit0_go_app.command()
@@ -321,7 +328,8 @@ def evaluate(
         merged = resolve_go_split(config["dataset_name"], config["dataset_split"])
         check_valid(
             config["repo_split"],
-            list(merged.keys()) + resolve_go_split_all(config["dataset_name"], config["dataset_split"]),
+            list(merged.keys())
+            + resolve_go_split_all(config["dataset_name"], config["dataset_split"]),
         )
 
     typer.echo(f"Evaluating Go split: {highlight(config['repo_split'], Colors.ORANGE)}")
