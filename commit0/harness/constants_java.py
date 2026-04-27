@@ -38,7 +38,7 @@ JAVA_TEST_FILE_SUFFIX = "Test.java"
 
 # Branch conventions (parallel to Python's BASE_BRANCH="commit0" and "commit0_all")
 JAVA_BASE_BRANCH = "commit0_java"          # Local working branch (like Python's "commit0")
-JAVA_REMOTE_BRANCH = "commit0_java_all"    # Remote branch pushed to fork (like Python's "commit0_all")
+JAVA_REMOTE_BRANCH = "commit0_all"    # Remote branch pushed to fork (like Python's "commit0_all")
 JAVA_SKIP_FILENAMES = {"module-info.java", "package-info.java"}
 
 # Source layout

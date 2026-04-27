@@ -1,0 +1,507 @@
+"""
+Prepare Java repos for a commit0 dataset.
+
+For each repo entry in java_dataset.json:
+1. Fork to GitHub org (default: Zahgon)
+2. Full clone at base_commit tag
+3. Create 'base' branch
+4. Stub Java sources (replace method bodies with UnsupportedOperationException)
+5. Commit stubbed version
+6. Scrape spec PDF into repo
+7. Push 'base' branch to fork
+8. Generate dataset entry with repo pointing to fork
+
+Usage:
+    # Single repo from java_dataset.json:
+    python tools/prepare_repo_java.py java_dataset.json \\
+        --repo apache/commons-io --output commons_io_entries.json
+
+    # All repos:
+    python tools/prepare_repo_java.py java_dataset.json --output java_entries.json
+
+    # Dry run (no fork, no push):
+    python tools/prepare_repo_java.py java_dataset.json \\
+        --repo apache/commons-io --dry-run --output java_entries.json
+
+Requires:
+    - gh CLI authenticated with repo/fork permissions
+    - JDK 17 + Maven (for JavaStubber)
+    - javastubber JAR built (auto-built if missing)
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import os
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+logger = logging.getLogger(__name__)
+
+DEFAULT_ORG = "Zahgon"
+
+TOOLS_DIR = Path(__file__).parent
+sys.path.insert(0, str(TOOLS_DIR.parent))
+
+from commit0.harness.constants_java import JAVA_REMOTE_BRANCH as REMOTE_BRANCH
+
+
+# ─── Git Helpers ──────────────────────────────────────────────────────────────
+
+
+def git(repo_dir: Path, *args: str, check: bool = True, timeout: int = 120) -> str:
+    """Run a git command in repo_dir, return stdout."""
+    result = subprocess.run(
+        ["git", *args],
+        cwd=repo_dir,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=check,
+    )
+    return result.stdout.strip()
+
+
+def get_head_sha(repo_dir: Path) -> str:
+    return git(repo_dir, "rev-parse", "HEAD")
+
+
+# ─── Fork ─────────────────────────────────────────────────────────────────────
+
+
+def fork_repo(full_name: str, org: str) -> str:
+    """Fork a repo to the target org using gh CLI. Returns fork full_name."""
+    fork_name = f"{org}/{full_name.split('/')[-1]}"
+
+    # Check if fork already exists
+    try:
+        result = subprocess.run(
+            ["gh", "repo", "view", fork_name, "--json", "name"],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode == 0:
+            logger.info("  Fork already exists: %s", fork_name)
+            return fork_name
+    except Exception:
+        pass
+
+    # Create fork
+    logger.info("  Forking %s to %s...", full_name, org)
+    subprocess.run(
+        ["gh", "repo", "fork", full_name, "--org", org, "--clone=false"],
+        capture_output=True, text=True, timeout=60, check=True,
+    )
+
+    # Wait for fork to be available
+    for _ in range(15):
+        try:
+            result = subprocess.run(
+                ["gh", "repo", "view", fork_name, "--json", "name"],
+                capture_output=True, text=True, timeout=30,
+            )
+            if result.returncode == 0:
+                logger.info("  Fork ready: %s", fork_name)
+                return fork_name
+        except Exception:
+            pass
+        time.sleep(2)
+
+    raise RuntimeError(f"Fork {fork_name} not available after 30s")
+
+
+# ─── Clone ────────────────────────────────────────────────────────────────────
+
+
+def full_clone(full_name: str, clone_dir: Path, tag: str) -> Path:
+    """Full clone of a repo at a specific tag. Returns repo dir."""
+    repo_short = full_name.split("/")[-1]
+    repo_dir = clone_dir / repo_short
+
+    if repo_dir.exists():
+        logger.info("  Repo dir exists, cleaning...")
+        shutil.rmtree(repo_dir)
+
+    url = f"https://github.com/{full_name}.git"
+    logger.info("  Cloning %s at tag %s...", full_name, tag)
+
+    try:
+        subprocess.run(
+            ["git", "clone", "--branch", tag, url, str(repo_dir)],
+            capture_output=True, text=True, timeout=600, check=True,
+        )
+    except subprocess.CalledProcessError:
+        # Tag might not be directly cloneable, clone then checkout
+        subprocess.run(
+            ["git", "clone", url, str(repo_dir)],
+            capture_output=True, text=True, timeout=600, check=True,
+        )
+        git(repo_dir, "checkout", tag)
+
+    # Fetch both tags (base + reference) to ensure they exist locally
+    git(repo_dir, "fetch", "--tags", timeout=300)
+
+    return repo_dir
+
+
+# ─── Java Source Detection ────────────────────────────────────────────────────
+
+
+def find_java_source_dirs(repo_dir: Path) -> list[Path]:
+    """Locate Java source directories, handling both standard and monorepo layouts."""
+    standard = repo_dir / "src" / "main" / "java"
+    if standard.exists():
+        return [standard]
+
+    candidates = list(repo_dir.rglob("src/main/java"))
+    if candidates:
+        return [c for c in candidates if "test" not in str(c).lower()]
+
+    # Monorepo layout (e.g. guava): <submodule>/src/ with .java files
+    monorepo_dirs = []
+    for child in sorted(repo_dir.iterdir()):
+        if child.is_dir() and (child / "src").is_dir():
+            java_files = list((child / "src").rglob("*.java"))
+            if java_files:
+                monorepo_dirs.append(child / "src")
+    return monorepo_dirs
+
+
+# ─── Stub & Commit ───────────────────────────────────────────────────────────
+
+
+def create_stubbed_branch(
+    repo_dir: Path,
+    full_name: str,
+    entry: dict,
+) -> tuple[str, str]:
+    """Create the remote branch with stubbed code.
+
+    Returns (base_commit_sha, reference_commit_sha).
+    All source changes (workflow removal + gitignore + stubs) go into a single
+    "Commit 0", matching Python prepare_repo.py. Spec PDF is a separate commit.
+    """
+    base_tag = entry["base_commit"]
+
+    git(repo_dir, "checkout", base_tag, check=False)
+
+    reference_tag = entry.get("reference_commit", base_tag)
+    try:
+        reference_commit = git(repo_dir, "rev-parse", reference_tag)
+    except Exception:
+        reference_commit = get_head_sha(repo_dir)
+
+    try:
+        git(repo_dir, "branch", "-D", REMOTE_BRANCH, check=False)
+    except Exception:
+        pass
+    git(repo_dir, "checkout", "-b", REMOTE_BRANCH)
+    logger.info("  Created branch: %s (from tag %s)", REMOTE_BRANCH, base_tag)
+
+    workflows_dir = repo_dir / ".github" / "workflows"
+    if workflows_dir.exists():
+        git(repo_dir, "rm", "-r", ".github/workflows")
+        logger.info("  Removed .github/workflows")
+
+    gitignore_path = repo_dir / ".gitignore"
+    existing_lines: list[str] = []
+    if gitignore_path.exists():
+        existing_lines = gitignore_path.read_text().splitlines()
+    added = []
+    for ignore_entry in [".aider*", "logs/", ".commit0_scripts/", ".github/workflows/"]:
+        if ignore_entry not in existing_lines:
+            added.append(ignore_entry)
+    if added:
+        with open(gitignore_path, "a") as f:
+            for line in added:
+                f.write(f"\n{line}")
+            f.write("\n")
+        logger.info("  Added %s to .gitignore", added)
+
+    from tools.stub_java import stub_java_sources
+
+    src_dirs = find_java_source_dirs(repo_dir)
+    if not src_dirs:
+        raise RuntimeError(f"No Java source dirs found in {repo_dir}")
+
+    total_stubs = 0
+    total_files = 0
+    for src_dir in src_dirs:
+        result = stub_java_sources(src_dir=str(src_dir))
+        total_stubs += result.get("totalStubs", 0)
+        total_files += result.get("totalFiles", 0)
+    logger.info("  Stubbed %d methods across %d files", total_stubs, total_files)
+
+    if total_stubs == 0:
+        raise RuntimeError(f"No stubs generated for {full_name}")
+
+    git(repo_dir, "add", "-A")
+    git(repo_dir, "commit", "-m", "Commit 0")
+    base_commit = get_head_sha(repo_dir)
+    logger.info("  Base commit (Commit 0): %s", base_commit[:12])
+
+    return base_commit, reference_commit
+
+
+# ─── Spec Scraping ───────────────────────────────────────────────────────────
+
+
+def scrape_spec(repo_dir: Path, repo_short: str, spec_url: str, specs_dir: Path) -> bool:
+    """Scrape spec PDF and commit into repo. Returns True if successful."""
+    dest = repo_dir / "spec.pdf.bz2"
+    if dest.exists():
+        logger.info("  spec.pdf.bz2 already exists, skipping")
+        return True
+
+    # Try cached spec first
+    cached = specs_dir / f"{repo_short}.pdf.bz2"
+    if cached.exists():
+        shutil.copy2(cached, dest)
+        git(repo_dir, "add", "spec.pdf.bz2")
+        git(repo_dir, "commit", "-m", f"Add spec PDF for {repo_short}")
+        logger.info("  Used cached spec")
+        return True
+
+    if not spec_url:
+        logger.info("  No spec URL, skipping")
+        return False
+
+    try:
+        from tools.scrape_pdf import scrape_spec_sync
+        logger.info("  Scraping spec from: %s", spec_url)
+        spec_path = scrape_spec_sync(
+            base_url=spec_url,
+            name=repo_short,
+            output_dir=str(specs_dir),
+            compress=True,
+        )
+        if spec_path:
+            shutil.copy2(spec_path, dest)
+            git(repo_dir, "add", "spec.pdf.bz2")
+            git(repo_dir, "commit", "-m", f"Add spec PDF for {repo_short}")
+            logger.info("  Spec saved and committed")
+            return True
+        logger.warning("  Spec scraping returned no output")
+        return False
+    except ImportError:
+        logger.warning("  scrape_pdf not available, skipping spec")
+        return False
+    except Exception as e:
+        logger.warning("  Spec scraping failed: %s", e)
+        return False
+
+
+# ─── Push to Fork ─────────────────────────────────────────────────────────────
+
+
+def push_to_fork(repo_dir: Path, fork_name: str, branch: str = REMOTE_BRANCH) -> None:
+    """Add fork as remote and push the base branch."""
+    fork_url = f"https://github.com/{fork_name}.git"
+
+    try:
+        git(repo_dir, "remote", "remove", "fork", check=False)
+    except Exception:
+        pass
+    git(repo_dir, "remote", "add", "fork", fork_url)
+
+    logger.info("  Pushing %s to %s...", branch, fork_name)
+    git(repo_dir, "push", "-f", "fork", branch, timeout=300)
+    logger.info("  Push complete")
+
+
+# ─── Dataset Entry ────────────────────────────────────────────────────────────
+
+
+def create_dataset_entry(
+    full_name: str,
+    fork_name: str,
+    base_commit: str,
+    reference_commit: str,
+    entry: dict,
+) -> dict:
+    """Create a dataset entry with repo pointing to the fork."""
+    repo_short = full_name.split("/")[-1]
+    return {
+        "instance_id": f"commit-0/{repo_short}",
+        "repo": fork_name,
+        "original_repo": full_name,
+        "base_commit": base_commit,
+        "reference_commit": reference_commit,
+        "setup": entry.get("setup", {}),
+        "test": entry.get("test", {}),
+        "src_dir": entry.get("src_dir", "src/main/java"),
+    }
+
+
+# ─── Main ─────────────────────────────────────────────────────────────────────
+
+
+def prepare_java_repos(
+    entries: list[dict],
+    clone_dir: Path,
+    org: str = DEFAULT_ORG,
+    dry_run: bool = False,
+    specs_dir: str = "./specs",
+    repo_filter: str | None = None,
+) -> list[dict]:
+    """Prepare Java repos for the dataset."""
+    dataset_entries: list[dict] = []
+    specs_path = Path(specs_dir)
+    specs_path.mkdir(parents=True, exist_ok=True)
+
+    for i, entry in enumerate(entries):
+        full_name = entry["repo"]
+
+        # Filter if specific repo requested
+        if repo_filter and full_name != repo_filter:
+            continue
+
+        logger.info(
+            "\n[%d/%d] Preparing %s...",
+            i + 1, len(entries), full_name,
+        )
+
+        # Fork
+        if dry_run:
+            fork_name = f"{org}/{full_name.split('/')[-1]}"
+            logger.info("  [DRY RUN] Would fork to %s", fork_name)
+        else:
+            try:
+                fork_name = fork_repo(full_name, org)
+            except Exception as e:
+                logger.error("  Fork failed: %s", e)
+                continue
+
+        # Full clone at base_commit tag
+        base_tag = entry["base_commit"]
+        try:
+            repo_dir = full_clone(full_name, clone_dir, tag=base_tag)
+        except Exception as e:
+            logger.error("  Clone failed: %s", e)
+            continue
+
+        # Create stubbed branch
+        try:
+            base_commit, reference_commit = create_stubbed_branch(
+                repo_dir, full_name, entry,
+            )
+        except Exception as e:
+            logger.error("  Stubbing failed: %s", e)
+            continue
+
+        # Scrape spec
+        spec_url = entry.get("setup", {}).get("specification", "")
+        scrape_spec(repo_dir, full_name.split("/")[-1], spec_url, specs_path)
+
+        base_commit = get_head_sha(repo_dir)
+
+        # Push to fork
+        if not dry_run:
+            try:
+                push_to_fork(repo_dir, fork_name)
+            except Exception as e:
+                logger.error("  Push failed: %s", e)
+                # Continue anyway — local clone still usable
+
+        # Create dataset entry
+        dataset_entry = create_dataset_entry(
+            full_name=full_name,
+            fork_name=fork_name,
+            base_commit=base_commit,
+            reference_commit=reference_commit,
+            entry=entry,
+        )
+        logger.info("  Entry: repo=%s, base=%s", fork_name, base_commit[:12])
+        dataset_entries.append(dataset_entry)
+
+    return dataset_entries
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Prepare Java repos for commit0 dataset"
+    )
+    parser.add_argument(
+        "dataset_file",
+        help="Input java_dataset.json with repo entries",
+    )
+    parser.add_argument(
+        "--repo",
+        type=str,
+        help="Prepare a single repo (e.g., apache/commons-io)",
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default="java_entries.json",
+        help="Output JSON file (default: java_entries.json)",
+    )
+    parser.add_argument(
+        "--clone-dir",
+        type=str,
+        default="./repos_staging/java",
+        help="Directory to clone repos into (default: ./repos_staging/java)",
+    )
+    parser.add_argument(
+        "--org",
+        type=str,
+        default=DEFAULT_ORG,
+        help=f"GitHub org to fork into (default: {DEFAULT_ORG})",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Skip forking and pushing (just clone, stub, generate entries)",
+    )
+    parser.add_argument(
+        "--specs-dir",
+        type=str,
+        default="./specs",
+        help="Directory for spec PDFs (default: ./specs)",
+    )
+
+    args = parser.parse_args()
+
+    # Load entries
+    raw = json.loads(Path(args.dataset_file).read_text())
+    if isinstance(raw, dict) and "entries" in raw:
+        entries = raw["entries"]
+    elif isinstance(raw, list):
+        entries = raw
+    else:
+        parser.error("Unrecognized dataset format")
+        return
+
+    clone_dir = Path(args.clone_dir)
+    clone_dir.mkdir(parents=True, exist_ok=True)
+
+    dataset_entries = prepare_java_repos(
+        entries,
+        clone_dir=clone_dir,
+        org=args.org,
+        dry_run=args.dry_run,
+        specs_dir=args.specs_dir,
+        repo_filter=args.repo,
+    )
+
+    # Save entries
+    output_path = Path(args.output)
+    output_path.write_text(json.dumps(dataset_entries, indent=2))
+    logger.info("Saved %d entries to %s", len(dataset_entries), output_path)
+
+    # Summary
+    print(f"\n{'=' * 80}")
+    print(f"PREPARED ENTRIES: {len(dataset_entries)}")
+    print(f"{'=' * 80}")
+    for e in dataset_entries:
+        print(f"  {e['instance_id']}: {e['repo']} (base={e['base_commit'][:12]})")
+    print(f"{'=' * 80}")
+
+
+if __name__ == "__main__":
+    main()
