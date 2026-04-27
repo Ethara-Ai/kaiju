@@ -1,0 +1,45 @@
+FROM ubuntu:22.04
+
+LABEL maintainer="commit0" \
+      description="Java 11 base image for Commit0" \
+      java.version="11"
+
+# ARG (not ENV) so DEBIAN_FRONTEND=noninteractive doesn't leak into runtime
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl git wget gnupg unzip \
+    && mkdir -p /etc/apt/keyrings \
+    && wget -qO - https://packages.adoptium.net/artifactory/api/gpg/key/public \
+        | gpg --dearmor -o /etc/apt/keyrings/adoptium.gpg \
+    && echo "deb [signed-by=/etc/apt/keyrings/adoptium.gpg] https://packages.adoptium.net/artifactory/deb jammy main" \
+        > /etc/apt/sources.list.d/adoptium.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends temurin-11-jdk \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG TARGETARCH
+ENV JAVA_HOME=/usr/lib/jvm/temurin-11-jdk-${TARGETARCH:-amd64}
+ENV PATH="${JAVA_HOME}/bin:${PATH}"
+
+ARG MAVEN_VERSION=3.9.6
+ARG MAVEN_SHA512=706f01b20dec0305a822ab614d51f32b07ee11d0218175e55450242e49d2156386483b506b3a4e8a03ac8611bae96395fd5eec15f50d3013d5deed6d1ee18224
+RUN curl -fsSL https://archive.apache.org/dist/maven/maven-3/${MAVEN_VERSION}/binaries/apache-maven-${MAVEN_VERSION}-bin.tar.gz \
+    -o /tmp/maven.tar.gz \
+    && echo "${MAVEN_SHA512}  /tmp/maven.tar.gz" | sha512sum -c - \
+    && tar -xzf /tmp/maven.tar.gz -C /opt \
+    && rm /tmp/maven.tar.gz \
+    && ln -s /opt/apache-maven-${MAVEN_VERSION}/bin/mvn /usr/local/bin/mvn
+
+ARG GRADLE_VERSION=8.5
+ARG GRADLE_SHA256=9d926787066a081739e8200858338b4a69e837c3a821a33aca9db09dd4a41026
+RUN curl -fsSL https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip \
+    -o /tmp/gradle.zip \
+    && echo "${GRADLE_SHA256}  /tmp/gradle.zip" | sha256sum -c - \
+    && unzip -q /tmp/gradle.zip -d /opt \
+    && ln -s /opt/gradle-${GRADLE_VERSION}/bin/gradle /usr/local/bin/gradle \
+    && rm /tmp/gradle.zip
+
+RUN test -d "$JAVA_HOME" && java -version && mvn --version && gradle --version
+
+WORKDIR /testbed
