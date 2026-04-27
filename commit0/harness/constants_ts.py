@@ -1,0 +1,43 @@
+"""TypeScript pipeline constants — co-located alongside Python constants.py."""
+
+from enum import Enum
+from pathlib import Path
+from typing import Dict
+
+from commit0.harness.constants import RepoInstance
+
+
+class Language(str, Enum):
+    PYTHON = "python"
+    TYPESCRIPT = "typescript"
+
+
+class TsRepoInstance(RepoInstance):
+    language: Language = Language.TYPESCRIPT
+    test_framework: str = "jest"
+
+
+TS_SPLIT: Dict[str, list[str]] = {
+    "all_ts": [],
+}
+
+# Per-repo branch created by setup_ts (one per repo clone)
+TS_BASE_BRANCH = "commit0"
+# Branch used for combined/all-repo dataset references
+TS_DATASET_BRANCH = "commit0_all"
+
+DEFAULT_NODE_VERSION = "20"
+CONTAINER_WORKDIR = "/testbed"
+
+TS_SOURCE_EXTS = (".ts", ".tsx")
+
+TS_STUB_MARKER = 'throw new Error("STUB")'
+
+TS_TEST_FILE_PATTERNS = ("*.test.ts", "*.spec.ts", "*.test.tsx", "*.spec.tsx")
+
+# Node 18 removed: reached EOL April 2025 and has no Dockerfile
+SUPPORTED_NODE_VERSIONS = {"20", "22"}
+
+RUN_TS_TEST_LOG_DIR = Path("logs/ts_test")
+
+TS_GITIGNORE_ENTRIES = ["node_modules/", "dist/", ".aider*", "logs/"]
