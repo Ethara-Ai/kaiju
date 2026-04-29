@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -31,6 +32,61 @@ from tools.prepare_repo import (
     get_default_branch,
 )
 from tools.stub_ts_runner import run_stub_ts
+
+# Lazy import for spec scraping (optional dependency) -- mirrors prepare_repo_go.py
+_scrape_spec_sync = None
+
+
+def _get_scrape_func():
+    """Lazy-load scrape_spec_sync to avoid importing optional deps at module level."""
+    global _scrape_spec_sync
+    if _scrape_spec_sync is None:
+        from tools.scrape_pdf import scrape_spec_sync
+
+        _scrape_spec_sync = scrape_spec_sync
+    return _scrape_spec_sync
+
+
+def resolve_commits_from_remote(
+    fork_name: str, branch: str
+) -> tuple[str, str] | None:
+    """Resolve (base, reference) commits from an existing remote branch.
+
+    Used as a fallback when the initial push fails but the fork already
+    has the dataset branch from a prior run. Mirrors
+    ``resolve_commits_from_remote`` in ``prepare_repo_go.py``.
+
+    Returns ``(base_sha, reference_sha)`` on success, ``None`` otherwise.
+    Requires the ``gh`` CLI to be authenticated.
+    """
+    try:
+        result = subprocess.run(
+            ["gh", "api", f"repos/{fork_name}/branches/{branch}"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            return None
+        branch_data = json.loads(result.stdout)
+        sha = branch_data["commit"]["sha"]
+
+        result = subprocess.run(
+            ["gh", "api", f"repos/{fork_name}/commits/{sha}"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            return None
+        commit_data = json.loads(result.stdout)
+        if not commit_data.get("parents"):
+            return None
+        parent_sha = commit_data["parents"][0]["sha"]
+        return (sha, parent_sha)
+    except Exception as e:
+        logger.debug("Non-critical failure during remote commit resolution: %s", e)
+        return None
 
 DEFAULT_ORG = "Zahgon"
 
@@ -475,7 +531,21 @@ def detect_test_framework(repo_dir: Path) -> str:
     return "jest"
 
 
-_BLOCKED_HOMEPAGE_DOMAINS = ("github.com", "gitlab.com", "npmjs.com", "npmjs.org")
+_BLOCKED_HOMEPAGE_DOMAINS = (
+    "github.com",
+    "gitlab.com",
+    "npmjs.com",
+    "npmjs.org",
+    # CDNs / JS package viewers -- return SPA shells or raw JS, not scrape-able docs
+    "skypack.dev",
+    "unpkg.com",
+    "jsdelivr.net",
+    "cdn.jsdelivr.net",
+    "esm.sh",
+    "bundle.run",
+    "packagephobia.com",
+    "bundlephobia.com",
+)
 
 
 def _detect_spec_url(repo_dir: Path) -> str:
@@ -515,9 +585,8 @@ def _detect_spec_url(repo_dir: Path) -> str:
         except Exception:
             pass
 
-    if pkg_name:
-        return f"https://www.skypack.dev/view/{pkg_name}"
-
+    # No Skypack / CDN fallback -- those return SPA shells, not scrape-able docs.
+    # Returning empty string lets the caller skip the scrape cleanly.
     return ""
 
 
@@ -716,11 +785,93 @@ def create_ts_stubbed_branch(
             "apparent stubs did not land in TypeScript source files."
         )
 
+    # Post-stub sanity: run `tsc --noEmit` to catch catastrophic syntactic
+    # damage before we commit the stubbed branch. Non-blocking -- many target
+    # repos have pre-existing type errors we can't fix here. We only care
+    # about bailing when the stubber emitted unparseable TypeScript.
+    _run_post_stub_tsc_check(repo_dir)
+
     git(repo_dir, "commit", "-m", "Commit 0")
     base_commit = get_head_sha(repo_dir)
     logger.info("  Base commit (stubbed): %s", base_commit[:12])
 
     return base_commit, reference_commit, functions_stubbed
+
+
+_TSC_FATAL_CODES = (
+    "TS1005",  # ';' expected, unexpected token
+    "TS1128",  # Declaration or statement expected
+    "TS1109",  # Expression expected
+    "TS1003",  # Identifier expected
+    "TS1131",  # Property or signature expected
+    "TS1135",  # Argument expression expected
+    "TS1136",  # Property assignment expected
+    "TS1144",  # '{' or ';' expected
+    "TS1160",  # Unterminated template literal
+    "TS1161",  # Unterminated regular expression literal
+)
+
+
+def _run_post_stub_tsc_check(repo_dir: Path) -> None:
+    """Run ``npx tsc --noEmit`` against the stubbed tree; warn on type errors,
+    raise only on fatal parse errors (truly broken syntax from the stubber).
+
+    Mirrors ``quick_import_check`` in ``prepare_repo.py`` and
+    ``verify_compiles`` in ``prepare_repo_rust.py``.
+    """
+    tsconfig = repo_dir / "tsconfig.json"
+    if not tsconfig.exists():
+        logger.debug("  Skipping tsc check: no tsconfig.json")
+        return
+    try:
+        result = subprocess.run(
+            ["npx", "--no-install", "tsc", "--noEmit", "--skipLibCheck"],
+            cwd=str(repo_dir),
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+    except FileNotFoundError:
+        logger.warning("  Skipping tsc check: npx not available")
+        return
+    except subprocess.TimeoutExpired:
+        logger.warning("  tsc --noEmit timed out after 180s (non-fatal)")
+        return
+
+    if result.returncode == 0:
+        logger.info("  Post-stub tsc check: clean")
+        return
+
+    combined = f"{result.stdout}\n{result.stderr}"
+    # Filter out errors from node_modules/ -- third-party type declarations
+    # leak through even with --skipLibCheck (which skips *type-check* but
+    # not parse). We only care about errors in the stubbed source tree.
+    project_err_lines = [
+        ln
+        for ln in combined.splitlines()
+        if "error TS" in ln and "node_modules/" not in ln
+    ]
+    project_errors = "\n".join(project_err_lines)
+    fatal_hits = sum(project_errors.count(code) for code in _TSC_FATAL_CODES)
+    err_line_count = len(project_err_lines)
+    if fatal_hits > 0:
+        raise RuntimeError(
+            f"Post-stub tsc check produced {fatal_hits} fatal parse error(s) "
+            f"({err_line_count} total TS errors in project code). The stubber emitted "
+            f"unparseable TypeScript -- refusing to commit stubbed branch.\n"
+            f"First 2000 chars of project tsc errors:\n{project_errors[:2000]}"
+        )
+    if err_line_count == 0:
+        logger.info(
+            "  Post-stub tsc check: clean (node_modules/ errors ignored)"
+        )
+        return
+    logger.warning(
+        "  Post-stub tsc check: %d type errors in project code (non-fatal -- "
+        "target repo may have pre-existing type issues)",
+        err_line_count,
+    )
 
 
 def prepare_ts_repo(
@@ -730,6 +881,7 @@ def prepare_ts_repo(
     src_dir_override: str | None = None,
     release_tag: str | None = None,
     dry_run: bool = False,
+    specs_dir: str = "./specs",
 ) -> dict | None:
     """Full pipeline for a single TypeScript repo.
 
@@ -771,7 +923,71 @@ def prepare_ts_repo(
     if not dry_run:
         branch_name = TS_DATASET_BRANCH
         git(repo_dir, "checkout", branch_name)
-        push_to_fork(repo_dir, fork_name, branch=branch_name, token=token)
+        try:
+            push_to_fork(repo_dir, fork_name, branch=branch_name, token=token)
+        except Exception as e:
+            logger.error("  Push failed: %s", e)
+            remote_commits = resolve_commits_from_remote(fork_name, branch_name)
+            if remote_commits:
+                base_commit, reference_commit = remote_commits
+                logger.info(
+                    "  Resolved commits from remote: base=%s, ref=%s",
+                    base_commit[:12],
+                    reference_commit[:12],
+                )
+            else:
+                logger.warning(
+                    "  No remote branch found -- using local commits only"
+                )
+
+    # ------------------------------------------------------------------
+    # Scrape spec PDF and commit into repo (mirrors prepare_repo_go.py).
+    # Must run AFTER stubbed-branch creation + initial push so the spec
+    # is committed onto the dataset branch; base_commit is then rebased
+    # to the post-spec HEAD so Docker clones include spec.pdf.bz2.
+    # ------------------------------------------------------------------
+    if setup_dict.get("specification"):
+        repo_name = full_name.split("/")[-1]
+        docs_url = setup_dict["specification"]
+        logger.info("  Scraping spec from: %s", docs_url)
+        try:
+            scrape_fn = _get_scrape_func()
+            spec_path = scrape_fn(
+                base_url=docs_url,
+                name=repo_name,
+                output_dir=str(specs_dir),
+                compress=True,
+            )
+            if spec_path:
+                logger.info("  Spec saved: %s", spec_path)
+                branch_name = TS_DATASET_BRANCH
+                git(repo_dir, "checkout", branch_name)
+                dest = repo_dir / "spec.pdf.bz2"
+                shutil.copy2(spec_path, dest)
+                git(repo_dir, "add", "spec.pdf.bz2")
+                git(repo_dir, "commit", "-m", f"Add spec PDF for {repo_name}")
+                base_commit = get_head_sha(repo_dir)
+                logger.info(
+                    "  Updated base_commit with spec: %s", base_commit[:12]
+                )
+                if not dry_run:
+                    try:
+                        push_to_fork(
+                            repo_dir,
+                            fork_name,
+                            branch=branch_name,
+                            token=token,
+                        )
+                    except Exception as e:
+                        logger.warning("  Spec push failed: %s", e)
+            else:
+                logger.warning("  Spec scraping returned no output")
+        except ImportError:
+            logger.warning(
+                "  Skipping spec scrape -- install: pip install playwright PyMuPDF PyPDF2 beautifulsoup4 requests && playwright install chromium"
+            )
+        except Exception as e:
+            logger.warning("  Spec scraping failed (non-fatal): %s", e)
 
     return {
         "instance_id": f"commit-0/{full_name.split('/')[-1]}",
@@ -789,20 +1005,34 @@ def prepare_ts_repo(
 
 
 def main() -> None:
-    """CLI entry point for prepare_repo_ts.py."""
+    """CLI entry point for prepare_repo_ts.py.
+
+    Supports two modes (mirrors prepare_repo_go.py):
+
+    * ``--repo owner/name``   -- prepare a single repo.
+    * ``input_file``          -- batch mode. Accepts a ``validated.json``-shaped
+                                  file (list of ``{full_name|repo, tag?}`` dicts,
+                                  or ``{"data": [...]}``). Iterates through all
+                                  entries; honours ``--max-repos``.
+    """
     import argparse
 
     parser = argparse.ArgumentParser(
         description="Prepare TypeScript repos for commit0 dataset"
     )
-    parser.add_argument("--repo", required=True, help="owner/name of the GitHub repo")
+    parser.add_argument(
+        "input_file",
+        nargs="?",
+        help="Batch input JSON (e.g. validated_ts.json). Mutually exclusive with --repo.",
+    )
+    parser.add_argument("--repo", default=None, help="owner/name of a single GitHub repo")
     parser.add_argument(
         "--org",
         default=DEFAULT_ORG,
         help=f"GitHub org for fork (default: {DEFAULT_ORG})",
     )
     parser.add_argument(
-        "--src-dir", default=None, help="Override auto-detected src dir"
+        "--src-dir", default=None, help="Override auto-detected src dir (single-repo mode only)"
     )
     parser.add_argument("--tag", default=None, help="Pin to a specific release tag")
     parser.add_argument(
@@ -811,34 +1041,103 @@ def main() -> None:
         default=Path("repos_staging"),
         help="Directory for cloned repos (default: repos_staging)",
     )
-    parser.add_argument("--output", default=None, help="Output entries JSON file")
+    parser.add_argument(
+        "--output",
+        default=None,
+        help="Output entries JSON file (default: stdout for single-repo, required for batch)",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Skip fork and push")
+    parser.add_argument(
+        "--max-repos",
+        type=int,
+        default=None,
+        help="Batch mode: maximum number of repos to prepare",
+    )
+    parser.add_argument(
+        "--specs-dir",
+        type=str,
+        default="./specs",
+        help="Directory to save scraped spec PDFs (default: ./specs)",
+    )
 
     args = parser.parse_args()
 
-    result = prepare_ts_repo(
-        full_name=args.repo,
-        clone_dir=args.clone_dir,
-        org=args.org,
-        src_dir_override=args.src_dir,
-        release_tag=args.tag,
-        dry_run=args.dry_run,
-    )
+    if not args.repo and not args.input_file:
+        parser.error("Provide either --repo owner/name or an input_file positional.")
+    if args.repo and args.input_file:
+        parser.error("--repo and input_file are mutually exclusive.")
 
-    if result is None:
-        logger.error("Failed to prepare %s", args.repo)
-        sys.exit(1)
+    args.clone_dir.mkdir(parents=True, exist_ok=True)
+    entries: list[dict] = []
+
+    if args.repo:
+        result = prepare_ts_repo(
+            full_name=args.repo,
+            clone_dir=args.clone_dir,
+            org=args.org,
+            src_dir_override=args.src_dir,
+            release_tag=args.tag,
+            dry_run=args.dry_run,
+            specs_dir=args.specs_dir,
+        )
+        if result is None:
+            logger.error("Failed to prepare %s", args.repo)
+            sys.exit(1)
+        entries.append(result)
+    else:
+        candidates = json.loads(Path(args.input_file).read_text())
+        if isinstance(candidates, dict) and "data" in candidates:
+            candidates = candidates["data"]
+        if not isinstance(candidates, list):
+            parser.error(
+                f"input_file {args.input_file} must contain a JSON list "
+                "or {\"data\": [...]}."
+            )
+
+        for i, candidate in enumerate(candidates):
+            if args.max_repos and i >= args.max_repos:
+                break
+            full_name = candidate.get("full_name") or candidate.get("repo") or ""
+            if not full_name:
+                logger.warning("  Skipping entry %d: no full_name or repo", i)
+                continue
+            try:
+                result = prepare_ts_repo(
+                    full_name=full_name,
+                    clone_dir=args.clone_dir,
+                    org=args.org,
+                    src_dir_override=None,
+                    release_tag=candidate.get("tag") or args.tag,
+                    dry_run=args.dry_run,
+                    specs_dir=args.specs_dir,
+                )
+            except Exception as e:
+                logger.error("  FAILED %s: %s", full_name, e)
+                continue
+            if result:
+                entries.append(result)
+
+        logger.info(
+            "Batch complete: %d/%d entries prepared",
+            len(entries),
+            min(len(candidates), args.max_repos or len(candidates)),
+        )
 
     if args.output:
         output_path = Path(args.output)
-        entries = [result]
         with open(output_path, "w") as f:
             json.dump(entries, f, indent=2)
-        logger.info("Wrote entries to %s", output_path)
+        logger.info("Wrote %d entries to %s", len(entries), output_path)
+    elif len(entries) == 1:
+        print(json.dumps(entries[0], indent=2))
     else:
-        print(json.dumps(result, indent=2))
+        print(json.dumps(entries, indent=2))
 
-    logger.info("Done: %s", result["instance_id"])
+    if entries:
+        logger.info(
+            "Done: %s",
+            ", ".join(e["instance_id"] for e in entries),
+        )
 
 
 if __name__ == "__main__":
