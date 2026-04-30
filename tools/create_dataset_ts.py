@@ -17,8 +17,6 @@ import logging
 import os
 from pathlib import Path
 
-from tools.create_dataset import generate_split_constants, generate_commit0_yaml
-
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -39,6 +37,54 @@ TS_TEST_FIELDS = {"test_cmd", "test_dir"}
 from commit0.harness.constants_ts import SUPPORTED_NODE_VERSIONS
 
 SUPPORTED_TEST_FRAMEWORKS = {"jest", "vitest"}
+
+
+def generate_ts_split_constants(
+    entries: list[dict], split_name: str = "custom_ts"
+) -> str:
+    """Generate Python code to extend ``TS_SPLIT`` in ``constants_ts.py``.
+
+    Mirrors ``generate_go_split_constants`` in ``create_dataset_go.py`` but
+    targets the TypeScript ``TS_SPLIT`` dict rather than Python ``SPLIT``.
+    """
+    repo_names = sorted(entry["repo"] for entry in entries)
+
+    lines = [
+        f"# TS split: {split_name} ({len(entries)} repos)",
+        f'TS_SPLIT["{split_name}"] = {{',
+    ]
+    for name in repo_names:
+        lines.append(f'    "{name}",')
+    lines.append("}")
+
+    lines.append("")
+    lines.append("# Individual TS repo splits")
+    for name in repo_names:
+        short = name.split("/")[-1]
+        lines.append(f'TS_SPLIT["{short}"] = {{"{name}"}}')
+
+    return "\n".join(lines)
+
+
+def generate_commit0_ts_yaml(
+    entries: list[dict], split_name: str, dataset_name: str
+) -> str:
+    """Generate ``.commit0.<split>.ts.yaml`` content for a TS dataset."""
+    repo_names = sorted(entry["repo"] for entry in entries)
+
+    yaml_content = f"""# commit0 TypeScript config for dataset: {split_name}
+dataset_name: {dataset_name}
+dataset_split: test
+repo_split: {split_name}
+language: typescript
+base_dir: repos
+
+# Repos in this split ({len(entries)}):
+"""
+    for name in repo_names:
+        yaml_content += f"#   - {name}\n"
+
+    return yaml_content
 
 
 def validate_ts_entry(entry: dict, index: int) -> list[str]:
@@ -291,14 +337,14 @@ def main() -> None:
     print(f"{'=' * 80}\n")
 
     if args.patch_constants:
-        constants_code = generate_split_constants(valid, args.split_name)
-        constants_file = Path(f"split_{args.split_name}.py")
+        constants_code = generate_ts_split_constants(valid, args.split_name)
+        constants_file = Path(f"split_{args.split_name}_ts.py")
         constants_file.write_text(constants_code)
-        logger.info("SPLIT constants written to %s", constants_file)
+        logger.info("TS_SPLIT constants written to %s", constants_file)
         print(f"\n# Add to constants_ts.py:\n{constants_code}\n")
 
     if args.generate_yaml:
-        yaml_content = generate_commit0_yaml(valid, args.split_name, args.hf_repo)
+        yaml_content = generate_commit0_ts_yaml(valid, args.split_name, args.hf_repo)
         yaml_file = Path(f".commit0.{args.split_name}.ts.yaml")
         yaml_file.write_text(yaml_content)
         logger.info("Config written to %s", yaml_file)

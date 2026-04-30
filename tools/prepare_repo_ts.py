@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -31,6 +32,61 @@ from tools.prepare_repo import (
     get_default_branch,
 )
 from tools.stub_ts_runner import run_stub_ts
+
+# Lazy import for spec scraping (optional dependency) -- mirrors prepare_repo_go.py
+_scrape_spec_sync = None
+
+
+def _get_scrape_func():
+    """Lazy-load scrape_spec_sync to avoid importing optional deps at module level."""
+    global _scrape_spec_sync
+    if _scrape_spec_sync is None:
+        from tools.scrape_pdf import scrape_spec_sync
+
+        _scrape_spec_sync = scrape_spec_sync
+    return _scrape_spec_sync
+
+
+def resolve_commits_from_remote(
+    fork_name: str, branch: str
+) -> tuple[str, str] | None:
+    """Resolve (base, reference) commits from an existing remote branch.
+
+    Used as a fallback when the initial push fails but the fork already
+    has the dataset branch from a prior run. Mirrors
+    ``resolve_commits_from_remote`` in ``prepare_repo_go.py``.
+
+    Returns ``(base_sha, reference_sha)`` on success, ``None`` otherwise.
+    Requires the ``gh`` CLI to be authenticated.
+    """
+    try:
+        result = subprocess.run(
+            ["gh", "api", f"repos/{fork_name}/branches/{branch}"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            return None
+        branch_data = json.loads(result.stdout)
+        sha = branch_data["commit"]["sha"]
+
+        result = subprocess.run(
+            ["gh", "api", f"repos/{fork_name}/commits/{sha}"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            return None
+        commit_data = json.loads(result.stdout)
+        if not commit_data.get("parents"):
+            return None
+        parent_sha = commit_data["parents"][0]["sha"]
+        return (sha, parent_sha)
+    except Exception as e:
+        logger.debug("Non-critical failure during remote commit resolution: %s", e)
+        return None
 
 DEFAULT_ORG = "Zahgon"
 
@@ -160,36 +216,253 @@ def detect_ts_src_dir(repo_dir: Path) -> str:
     return ""
 
 
+_TEST_SCAN_SKIP_DIRS = {
+    "node_modules",
+    ".git",
+    "dist",
+    "build",
+    "coverage",
+    ".next",
+    ".nuxt",
+    "out",
+    ".turbo",
+    ".cache",
+    ".yarn",
+    ".pnp",
+    ".pnpm-store",
+    "lib",
+    "es",
+    "esm",
+    "cjs",
+}
+
+_TEST_DIR_NAMES = {"__tests__", "test", "tests", "__test__", "spec", "specs"}
+_TEST_FILE_SUFFIXES = (
+    ".test.ts",
+    ".spec.ts",
+    ".test.tsx",
+    ".spec.tsx",
+    ".test.js",
+    ".spec.js",
+    ".test.jsx",
+    ".spec.jsx",
+    ".test.mts",
+    ".spec.mts",
+    ".test.cjs",
+    ".spec.cjs",
+)
+
+
+def _walk_repo_filtered(repo_dir: Path):
+    """Yield (dirpath, dirnames, filenames) walking *repo_dir* while skipping vendor dirs.
+
+    Walks are always rooted at *repo_dir*. Hidden dirs (leading dot) are skipped except
+    for the repo root itself. ``node_modules`` and other vendor dirs in
+    ``_TEST_SCAN_SKIP_DIRS`` are pruned in-place.
+    """
+    for dirpath, dirnames, filenames in os.walk(repo_dir):
+        # Prune in-place so os.walk does not descend into vendor / build dirs.
+        dirnames[:] = [
+            d
+            for d in dirnames
+            if d not in _TEST_SCAN_SKIP_DIRS and not d.startswith(".")
+        ]
+        yield Path(dirpath), dirnames, filenames
+
+
+def _detect_test_dirs_from_config(repo_dir: Path) -> list[Path]:
+    """Config-driven test detection.
+
+    Parses package.json (jest / vitest / mocha blocks), jest.config.*, vitest.config.*,
+    and .mocharc.* for test-file globs or roots. Returns absolute dirs that exist and
+    contain at least one TS / JS source file. No throwing -- returns [] on any error.
+    """
+    import re
+
+    candidate_strings: list[str] = []
+
+    # ---- package.json: jest.* + vitest.* + mocha --------------------------------------
+    pkg_path = repo_dir / "package.json"
+    if pkg_path.exists():
+        try:
+            pkg = json.loads(pkg_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            pkg = {}
+        jest_block = pkg.get("jest", {}) if isinstance(pkg, dict) else {}
+        if isinstance(jest_block, dict):
+            for key in ("testMatch", "testRegex", "roots", "testPathIgnorePatterns"):
+                val = jest_block.get(key)
+                if isinstance(val, list):
+                    candidate_strings.extend(str(v) for v in val)
+                elif isinstance(val, str):
+                    candidate_strings.append(val)
+        mocha_block = pkg.get("mocha", {}) if isinstance(pkg, dict) else {}
+        if isinstance(mocha_block, dict):
+            spec = mocha_block.get("spec")
+            if isinstance(spec, list):
+                candidate_strings.extend(str(v) for v in spec)
+            elif isinstance(spec, str):
+                candidate_strings.append(spec)
+        vitest_block = pkg.get("vitest", {}) if isinstance(pkg, dict) else {}
+        if isinstance(vitest_block, dict):
+            for key in ("include", "dir", "root"):
+                val = vitest_block.get(key)
+                if isinstance(val, list):
+                    candidate_strings.extend(str(v) for v in val)
+                elif isinstance(val, str):
+                    candidate_strings.append(val)
+
+    # ---- jest.config.* / vitest.config.* / .mocharc.* (scrape test-related keys only) --
+    CONFIG_FILES = [
+        "jest.config.js",
+        "jest.config.cjs",
+        "jest.config.mjs",
+        "jest.config.ts",
+        "jest.config.json",
+        "vitest.config.ts",
+        "vitest.config.js",
+        "vitest.config.mts",
+        "vitest.config.cjs",
+        "vitest.workspace.ts",
+        ".mocharc.json",
+        ".mocharc.cjs",
+        ".mocharc.js",
+        ".mocharc.yml",
+        ".mocharc.yaml",
+    ]
+    # Only scrape string values adjacent to test-location keys.
+    # Avoids false positives from collectCoverageFrom, transform, etc.
+    _TEST_LOCATION_KEYS = (
+        "testMatch",
+        "testRegex",
+        "testPathPattern",
+        "roots",
+        "testDir",
+        "include",
+        "dir",
+        "spec",
+    )
+    _cfg_key_value_re = re.compile(
+        r"(?:"
+        + "|".join(re.escape(k) for k in _TEST_LOCATION_KEYS)
+        + r")"
+        r"""['"]*\s*[:=]\s*"""
+        r"""[\[]*\s*['"` ]?([^'"`\n\],]{1,300})['"` \]]?""",
+    )
+    for name in CONFIG_FILES:
+        cfg_path = repo_dir / name
+        if not cfg_path.exists():
+            continue
+        try:
+            text = cfg_path.read_text()
+        except OSError:
+            continue
+        for match in _cfg_key_value_re.findall(text):
+            candidate_strings.append(match.strip())
+
+    # ---- Convert glob/regex strings into concrete directories -------------------------
+    resolved: list[Path] = []
+    seen: set[Path] = set()
+    for s in candidate_strings:
+        s = s.strip()
+        if not s or s.startswith("!"):
+            continue
+        # Strip leading <rootDir>/, ./, /
+        s = re.sub(r"^<rootDir>/?", "", s)
+        s = re.sub(r"^\./", "", s)
+        s = s.lstrip("/")
+        # Strip file-name / glob tail to get the "dir" part.
+        # Take everything up to the first wildcard or file-extension token.
+        dir_part = re.split(r"[*?(]|\.(?:t|j)sx?$|\.spec|\.test", s, maxsplit=1)[0]
+        dir_part = dir_part.rstrip("/")
+        if not dir_part:
+            continue
+        candidate = (repo_dir / dir_part).resolve()
+        # Reject escapes and non-existent dirs.
+        try:
+            candidate.relative_to(repo_dir.resolve())
+        except ValueError:
+            continue
+        if not candidate.is_dir():
+            continue
+        if candidate == repo_dir.resolve():
+            # Root-level config match is too coarse; keep for tier 2 to refine.
+            continue
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        resolved.append(candidate)
+
+    # Only keep dirs that actually contain TS / JS source files anywhere below.
+    kept: list[Path] = []
+    for d in resolved:
+        for _, _, files in _walk_repo_filtered(d):
+            if any(
+                f.endswith((".ts", ".tsx", ".js", ".jsx", ".mts", ".cjs")) for f in files
+            ):
+                kept.append(d)
+                break
+    return kept
+
+
+def _detect_test_dirs_recursive_scan(repo_dir: Path) -> list[Path]:
+    """Recursive filesystem scan.
+
+    Looks for (a) *any* directory named __tests__ / test / tests / spec / specs that
+    contains a TS or JS file, and (b) parent directories of *.test.* / *.spec.* files.
+    Returns candidates ranked by number of test files (descending).
+    """
+    counts: dict[Path, int] = {}
+    for dirpath, _, filenames in _walk_repo_filtered(repo_dir):
+        # (a) Named test directories
+        if dirpath != repo_dir and dirpath.name.lower() in _TEST_DIR_NAMES:
+            ts_js_files = [
+                f
+                for f in filenames
+                if f.endswith((".ts", ".tsx", ".js", ".jsx", ".mts", ".cjs"))
+            ]
+            if ts_js_files:
+                counts[dirpath] = counts.get(dirpath, 0) + len(ts_js_files)
+        # (b) Files with .test.* / .spec.* suffix
+        for f in filenames:
+            if f.endswith(_TEST_FILE_SUFFIXES):
+                counts[dirpath] = counts.get(dirpath, 0) + 1
+    # Sort by count desc, then by shortest path (closer to root = more canonical).
+    return [p for p, _ in sorted(counts.items(), key=lambda kv: (-kv[1], len(kv[0].parts)))]
+
+
 def detect_ts_test_dirs(repo_dir: Path) -> list[Path]:
     """Find test directories containing TypeScript test files.
 
-    Looks for directories matching common TS test patterns:
-    __tests__/, test/, tests/ that contain .test.ts or .spec.ts files.
+   uses 3-tier detection (config-driven → recursive scan → empty).
 
     Returns
     -------
-        List of absolute Paths to test directories.
+        List of absolute Paths to test directories, ranked by confidence. Empty when
+        no tests found anywhere (callers must handle this explicitly).
 
     """
-    test_dirs: list[Path] = []
-    test_dir_names = {"__tests__", "test", "tests"}
+    # Tier 1: config-driven
+    config_dirs = _detect_test_dirs_from_config(repo_dir)
+    if config_dirs:
+        return config_dirs
 
-    for child in sorted(repo_dir.iterdir()):
-        if not child.is_dir():
-            continue
-        if child.name.lower() in test_dir_names:
-            ts_test_files = (
-                list(child.rglob("*.test.ts"))
-                + list(child.rglob("*.spec.ts"))
-                + list(child.rglob("*.test.tsx"))
-                + list(child.rglob("*.spec.tsx"))
-                + list(child.rglob("*.test.js"))
-                + list(child.rglob("*.spec.js"))
-            )
-            if ts_test_files:
-                test_dirs.append(child)
+    # Tier 2: recursive scan
+    return _detect_test_dirs_recursive_scan(repo_dir)
 
-    return test_dirs
+
+def detect_ts_test_dirs_with_provenance(repo_dir: Path) -> tuple[list[Path], str]:
+    """Like :func:`detect_ts_test_dirs` but also returns the detection heuristic used.
+
+    Heuristic name is one of: ``"config"``, ``"recursive-scan"``, ``"none"``.
+    """
+    config_dirs = _detect_test_dirs_from_config(repo_dir)
+    if config_dirs:
+        return config_dirs, "config"
+    scan_dirs = _detect_test_dirs_recursive_scan(repo_dir)
+    if scan_dirs:
+        return scan_dirs, "recursive-scan"
+    return [], "none"
 
 
 def detect_package_manager(repo_dir: Path) -> str:
@@ -258,7 +531,21 @@ def detect_test_framework(repo_dir: Path) -> str:
     return "jest"
 
 
-_BLOCKED_HOMEPAGE_DOMAINS = ("github.com", "gitlab.com", "npmjs.com", "npmjs.org")
+_BLOCKED_HOMEPAGE_DOMAINS = (
+    "github.com",
+    "gitlab.com",
+    "npmjs.com",
+    "npmjs.org",
+    # CDNs / JS package viewers -- return SPA shells or raw JS, not scrape-able docs
+    "skypack.dev",
+    "unpkg.com",
+    "jsdelivr.net",
+    "cdn.jsdelivr.net",
+    "esm.sh",
+    "bundle.run",
+    "packagephobia.com",
+    "bundlephobia.com",
+)
 
 
 def _detect_spec_url(repo_dir: Path) -> str:
@@ -298,9 +585,8 @@ def _detect_spec_url(repo_dir: Path) -> str:
         except Exception:
             pass
 
-    if pkg_name:
-        return f"https://www.skypack.dev/view/{pkg_name}"
-
+    # No Skypack / CDN fallback -- those return SPA shells, not scrape-able docs.
+    # Returning empty string lets the caller skip the scrape cleanly.
     return ""
 
 
@@ -323,11 +609,15 @@ def generate_setup_dict_ts(repo_dir: Path) -> tuple[dict, dict, str]:
         except (json.JSONDecodeError, OSError):
             pass
 
-    test_dirs = detect_ts_test_dirs(repo_dir)
+    test_dirs, test_dir_detected_by = detect_ts_test_dirs_with_provenance(repo_dir)
     if test_dirs:
         test_dir = test_dirs[0].name
     else:
-        test_dir = "__tests__"
+        raise RuntimeError(
+            f"Could not detect a test directory for {repo_dir.name}. "
+            "Inspect package.json (jest/vitest/mocha), jest.config.*, vitest.config.*, "
+            ".mocharc.*, or the filesystem layout and set test_dir manually in the entries JSON."
+        )
 
     spec_url = _detect_spec_url(repo_dir)
 
@@ -348,6 +638,7 @@ def generate_setup_dict_ts(repo_dir: Path) -> tuple[dict, dict, str]:
     test_dict = {
         "test_cmd": test_cmd,
         "test_dir": test_dir,
+        "test_dir_detected_by": test_dir_detected_by,
     }
 
     return setup_dict, test_dict, test_framework
@@ -382,14 +673,14 @@ def create_ts_stubbed_branch(
     full_name: str,
     src_dir: str,
     branch_name: str = TS_DATASET_BRANCH,
-) -> tuple[str, str]:
+) -> tuple[str, str, int]:
     """Create the commit0 branch with stubbed TypeScript code.
 
     Mirrors create_stubbed_branch from prepare_repo.py (lines 265-422).
 
     Returns
     -------
-        (base_commit_sha, reference_commit_sha)
+        (base_commit_sha, reference_commit_sha, functions_stubbed)
 
     """
     default_branch = get_default_branch(repo_dir)
@@ -461,33 +752,126 @@ def create_ts_stubbed_branch(
     status = git(repo_dir, "status", "--porcelain")
     if not status:
         logger.warning("  No changes after stubbing -- source may already be stubs?")
-        return reference_commit, reference_commit
+        return reference_commit, reference_commit, 0
 
-    diff_patch = git(repo_dir, "diff", "--cached")
-    additions = sum(
-        1
-        for line in diff_patch.splitlines()
-        if line.startswith("+") and not line.startswith("+++")
-    )
-    deletions = sum(
-        1
-        for line in diff_patch.splitlines()
-        if line.startswith("-") and not line.startswith("---")
-    )
-    logger.info("  Diff stats -- lines added: %d, removed: %d", additions, deletions)
-
-    if additions == 0 or deletions == 0:
+    functions_stubbed = report.get("functions_stubbed", 0)
+    if functions_stubbed == 0:
         raise RuntimeError(
-            f"Stubbing verification failed for {full_name}: "
-            f"additions={additions}, deletions={deletions}. "
-            f"Expected both > 0."
+            f"No functions were stubbed for {full_name}; aborting pipeline"
+            "Running the agent on a repo with zero stubs is wasteful and inflates pass "
+            "rates with trivial baselines. Investigate the stubber output above."
         )
+
+    diff_ts = git(
+        repo_dir, "diff", "--cached", "--unified=0", "--", "*.ts", "*.tsx"
+    )
+    stub_marker_count = sum(
+        1
+        for line in diff_ts.splitlines()
+        if line.startswith("+")
+        and not line.startswith("+++")
+        and 'throw new Error("STUB")' in line
+    )
+    logger.info(
+        "  Stub verification -- .ts/.tsx STUB markers added: %d (expected >= 1)",
+        stub_marker_count,
+    )
+
+    if stub_marker_count < 1:
+        raise RuntimeError(
+            f"Stubbing verification failed for {full_name}: functions_stubbed="
+            f"{functions_stubbed} but the staged .ts/.tsx diff contains zero "
+            'added lines matching `throw new Error("STUB")`. The '
+            "apparent stubs did not land in TypeScript source files."
+        )
+
+    # Post-stub sanity: run `tsc --noEmit` to catch catastrophic syntactic
+    # damage before we commit the stubbed branch. Non-blocking -- many target
+    # repos have pre-existing type errors we can't fix here. We only care
+    # about bailing when the stubber emitted unparseable TypeScript.
+    _run_post_stub_tsc_check(repo_dir)
 
     git(repo_dir, "commit", "-m", "Commit 0")
     base_commit = get_head_sha(repo_dir)
     logger.info("  Base commit (stubbed): %s", base_commit[:12])
 
-    return base_commit, reference_commit
+    return base_commit, reference_commit, functions_stubbed
+
+
+_TSC_FATAL_CODES = (
+    "TS1005",  # ';' expected, unexpected token
+    "TS1128",  # Declaration or statement expected
+    "TS1109",  # Expression expected
+    "TS1003",  # Identifier expected
+    "TS1131",  # Property or signature expected
+    "TS1135",  # Argument expression expected
+    "TS1136",  # Property assignment expected
+    "TS1144",  # '{' or ';' expected
+    "TS1160",  # Unterminated template literal
+    "TS1161",  # Unterminated regular expression literal
+)
+
+
+def _run_post_stub_tsc_check(repo_dir: Path) -> None:
+    """Run ``npx tsc --noEmit`` against the stubbed tree; warn on type errors,
+    raise only on fatal parse errors (truly broken syntax from the stubber).
+
+    Mirrors ``quick_import_check`` in ``prepare_repo.py`` and
+    ``verify_compiles`` in ``prepare_repo_rust.py``.
+    """
+    tsconfig = repo_dir / "tsconfig.json"
+    if not tsconfig.exists():
+        logger.debug("  Skipping tsc check: no tsconfig.json")
+        return
+    try:
+        result = subprocess.run(
+            ["npx", "--no-install", "tsc", "--noEmit", "--skipLibCheck"],
+            cwd=str(repo_dir),
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+    except FileNotFoundError:
+        logger.warning("  Skipping tsc check: npx not available")
+        return
+    except subprocess.TimeoutExpired:
+        logger.warning("  tsc --noEmit timed out after 180s (non-fatal)")
+        return
+
+    if result.returncode == 0:
+        logger.info("  Post-stub tsc check: clean")
+        return
+
+    combined = f"{result.stdout}\n{result.stderr}"
+    # Filter out errors from node_modules/ -- third-party type declarations
+    # leak through even with --skipLibCheck (which skips *type-check* but
+    # not parse). We only care about errors in the stubbed source tree.
+    project_err_lines = [
+        ln
+        for ln in combined.splitlines()
+        if "error TS" in ln and "node_modules/" not in ln
+    ]
+    project_errors = "\n".join(project_err_lines)
+    fatal_hits = sum(project_errors.count(code) for code in _TSC_FATAL_CODES)
+    err_line_count = len(project_err_lines)
+    if fatal_hits > 0:
+        raise RuntimeError(
+            f"Post-stub tsc check produced {fatal_hits} fatal parse error(s) "
+            f"({err_line_count} total TS errors in project code). The stubber emitted "
+            f"unparseable TypeScript -- refusing to commit stubbed branch.\n"
+            f"First 2000 chars of project tsc errors:\n{project_errors[:2000]}"
+        )
+    if err_line_count == 0:
+        logger.info(
+            "  Post-stub tsc check: clean (node_modules/ errors ignored)"
+        )
+        return
+    logger.warning(
+        "  Post-stub tsc check: %d type errors in project code (non-fatal -- "
+        "target repo may have pre-existing type issues)",
+        err_line_count,
+    )
 
 
 def prepare_ts_repo(
@@ -497,6 +881,7 @@ def prepare_ts_repo(
     src_dir_override: str | None = None,
     release_tag: str | None = None,
     dry_run: bool = False,
+    specs_dir: str = "./specs",
 ) -> dict | None:
     """Full pipeline for a single TypeScript repo.
 
@@ -531,14 +916,78 @@ def prepare_ts_repo(
         setup_dict["install"].split()[0],
     )
 
-    base_commit, reference_commit = create_ts_stubbed_branch(
+    base_commit, reference_commit, functions_stubbed = create_ts_stubbed_branch(
         repo_dir, full_name, src_dir
     )
 
     if not dry_run:
         branch_name = TS_DATASET_BRANCH
         git(repo_dir, "checkout", branch_name)
-        push_to_fork(repo_dir, fork_name, branch=branch_name, token=token)
+        try:
+            push_to_fork(repo_dir, fork_name, branch=branch_name, token=token)
+        except Exception as e:
+            logger.error("  Push failed: %s", e)
+            remote_commits = resolve_commits_from_remote(fork_name, branch_name)
+            if remote_commits:
+                base_commit, reference_commit = remote_commits
+                logger.info(
+                    "  Resolved commits from remote: base=%s, ref=%s",
+                    base_commit[:12],
+                    reference_commit[:12],
+                )
+            else:
+                logger.warning(
+                    "  No remote branch found -- using local commits only"
+                )
+
+    # ------------------------------------------------------------------
+    # Scrape spec PDF and commit into repo (mirrors prepare_repo_go.py).
+    # Must run AFTER stubbed-branch creation + initial push so the spec
+    # is committed onto the dataset branch; base_commit is then rebased
+    # to the post-spec HEAD so Docker clones include spec.pdf.bz2.
+    # ------------------------------------------------------------------
+    if setup_dict.get("specification"):
+        repo_name = full_name.split("/")[-1]
+        docs_url = setup_dict["specification"]
+        logger.info("  Scraping spec from: %s", docs_url)
+        try:
+            scrape_fn = _get_scrape_func()
+            spec_path = scrape_fn(
+                base_url=docs_url,
+                name=repo_name,
+                output_dir=str(specs_dir),
+                compress=True,
+            )
+            if spec_path:
+                logger.info("  Spec saved: %s", spec_path)
+                branch_name = TS_DATASET_BRANCH
+                git(repo_dir, "checkout", branch_name)
+                dest = repo_dir / "spec.pdf.bz2"
+                shutil.copy2(spec_path, dest)
+                git(repo_dir, "add", "spec.pdf.bz2")
+                git(repo_dir, "commit", "-m", f"Add spec PDF for {repo_name}")
+                base_commit = get_head_sha(repo_dir)
+                logger.info(
+                    "  Updated base_commit with spec: %s", base_commit[:12]
+                )
+                if not dry_run:
+                    try:
+                        push_to_fork(
+                            repo_dir,
+                            fork_name,
+                            branch=branch_name,
+                            token=token,
+                        )
+                    except Exception as e:
+                        logger.warning("  Spec push failed: %s", e)
+            else:
+                logger.warning("  Spec scraping returned no output")
+        except ImportError:
+            logger.warning(
+                "  Skipping spec scrape -- install: pip install playwright PyMuPDF PyPDF2 beautifulsoup4 requests && playwright install chromium"
+            )
+        except Exception as e:
+            logger.warning("  Spec scraping failed (non-fatal): %s", e)
 
     return {
         "instance_id": f"commit-0/{full_name.split('/')[-1]}",
@@ -549,26 +998,41 @@ def prepare_ts_repo(
         "src_dir": src_dir,
         "language": "typescript",
         "test_framework": test_framework,
+        "functions_stubbed": functions_stubbed,
         "setup": setup_dict,
         "test": test_dict,
     }
 
 
 def main() -> None:
-    """CLI entry point for prepare_repo_ts.py."""
+    """CLI entry point for prepare_repo_ts.py.
+
+    Supports two modes (mirrors prepare_repo_go.py):
+
+    * ``--repo owner/name``   -- prepare a single repo.
+    * ``input_file``          -- batch mode. Accepts a ``validated.json``-shaped
+                                  file (list of ``{full_name|repo, tag?}`` dicts,
+                                  or ``{"data": [...]}``). Iterates through all
+                                  entries; honours ``--max-repos``.
+    """
     import argparse
 
     parser = argparse.ArgumentParser(
         description="Prepare TypeScript repos for commit0 dataset"
     )
-    parser.add_argument("--repo", required=True, help="owner/name of the GitHub repo")
+    parser.add_argument(
+        "input_file",
+        nargs="?",
+        help="Batch input JSON (e.g. validated_ts.json). Mutually exclusive with --repo.",
+    )
+    parser.add_argument("--repo", default=None, help="owner/name of a single GitHub repo")
     parser.add_argument(
         "--org",
         default=DEFAULT_ORG,
         help=f"GitHub org for fork (default: {DEFAULT_ORG})",
     )
     parser.add_argument(
-        "--src-dir", default=None, help="Override auto-detected src dir"
+        "--src-dir", default=None, help="Override auto-detected src dir (single-repo mode only)"
     )
     parser.add_argument("--tag", default=None, help="Pin to a specific release tag")
     parser.add_argument(
@@ -577,34 +1041,103 @@ def main() -> None:
         default=Path("repos_staging"),
         help="Directory for cloned repos (default: repos_staging)",
     )
-    parser.add_argument("--output", default=None, help="Output entries JSON file")
+    parser.add_argument(
+        "--output",
+        default=None,
+        help="Output entries JSON file (default: stdout for single-repo, required for batch)",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Skip fork and push")
+    parser.add_argument(
+        "--max-repos",
+        type=int,
+        default=None,
+        help="Batch mode: maximum number of repos to prepare",
+    )
+    parser.add_argument(
+        "--specs-dir",
+        type=str,
+        default="./specs",
+        help="Directory to save scraped spec PDFs (default: ./specs)",
+    )
 
     args = parser.parse_args()
 
-    result = prepare_ts_repo(
-        full_name=args.repo,
-        clone_dir=args.clone_dir,
-        org=args.org,
-        src_dir_override=args.src_dir,
-        release_tag=args.tag,
-        dry_run=args.dry_run,
-    )
+    if not args.repo and not args.input_file:
+        parser.error("Provide either --repo owner/name or an input_file positional.")
+    if args.repo and args.input_file:
+        parser.error("--repo and input_file are mutually exclusive.")
 
-    if result is None:
-        logger.error("Failed to prepare %s", args.repo)
-        sys.exit(1)
+    args.clone_dir.mkdir(parents=True, exist_ok=True)
+    entries: list[dict] = []
+
+    if args.repo:
+        result = prepare_ts_repo(
+            full_name=args.repo,
+            clone_dir=args.clone_dir,
+            org=args.org,
+            src_dir_override=args.src_dir,
+            release_tag=args.tag,
+            dry_run=args.dry_run,
+            specs_dir=args.specs_dir,
+        )
+        if result is None:
+            logger.error("Failed to prepare %s", args.repo)
+            sys.exit(1)
+        entries.append(result)
+    else:
+        candidates = json.loads(Path(args.input_file).read_text())
+        if isinstance(candidates, dict) and "data" in candidates:
+            candidates = candidates["data"]
+        if not isinstance(candidates, list):
+            parser.error(
+                f"input_file {args.input_file} must contain a JSON list "
+                "or {\"data\": [...]}."
+            )
+
+        for i, candidate in enumerate(candidates):
+            if args.max_repos and i >= args.max_repos:
+                break
+            full_name = candidate.get("full_name") or candidate.get("repo") or ""
+            if not full_name:
+                logger.warning("  Skipping entry %d: no full_name or repo", i)
+                continue
+            try:
+                result = prepare_ts_repo(
+                    full_name=full_name,
+                    clone_dir=args.clone_dir,
+                    org=args.org,
+                    src_dir_override=None,
+                    release_tag=candidate.get("tag") or args.tag,
+                    dry_run=args.dry_run,
+                    specs_dir=args.specs_dir,
+                )
+            except Exception as e:
+                logger.error("  FAILED %s: %s", full_name, e)
+                continue
+            if result:
+                entries.append(result)
+
+        logger.info(
+            "Batch complete: %d/%d entries prepared",
+            len(entries),
+            min(len(candidates), args.max_repos or len(candidates)),
+        )
 
     if args.output:
         output_path = Path(args.output)
-        entries = [result]
         with open(output_path, "w") as f:
             json.dump(entries, f, indent=2)
-        logger.info("Wrote entries to %s", output_path)
+        logger.info("Wrote %d entries to %s", len(entries), output_path)
+    elif len(entries) == 1:
+        print(json.dumps(entries[0], indent=2))
     else:
-        print(json.dumps(result, indent=2))
+        print(json.dumps(entries, indent=2))
 
-    logger.info("Done: %s", result["instance_id"])
+    if entries:
+        logger.info(
+            "Done: %s",
+            ", ".join(e["instance_id"] for e in entries),
+        )
 
 
 if __name__ == "__main__":

@@ -202,21 +202,37 @@ class TestDetectSpecUrlEdgeCases:
 
 
 class TestGenerateSetupDictTsEdgeCases:
+    def _write_test_dir(self, tmp_path: Path) -> None:
+        tests_dir = tmp_path / "__tests__"
+        tests_dir.mkdir()
+        (tests_dir / "a.test.ts").write_text("test('x', () => {});")
+
     def test_package_json_parse_failure_fallback(self, tmp_path: Path) -> None:
         (tmp_path / "package.json").write_text("invalid json")
+
+        # Issue E3: With no detectable test dir and no config, generate_setup_dict_ts
+        # must hard-error (previous silent `__tests__` default caused batch-2 failures).
+        with pytest.raises(RuntimeError, match="Could not detect a test directory"):
+            generate_setup_dict_ts(tmp_path)
+
+    def test_package_json_parse_failure_with_tests_present(self, tmp_path: Path) -> None:
+        (tmp_path / "package.json").write_text("invalid json")
+        self._write_test_dir(tmp_path)
 
         setup_dict, test_dict, test_framework = generate_setup_dict_ts(tmp_path)
 
         assert test_framework == "jest"
         assert setup_dict["packages"] == []
         assert test_dict["test_dir"] == "__tests__"
+        assert test_dict["test_dir_detected_by"] in ("config", "recursive-scan")
 
-    def test_no_test_dirs_defaults_to_dunder_tests(self, tmp_path: Path) -> None:
+    def test_no_test_dirs_raises_runtime_error(self, tmp_path: Path) -> None:
+        # Issue E3: hard error when no test dir is detectable.
         pkg = {"devDependencies": {"jest": "^29.0.0"}}
         (tmp_path / "package.json").write_text(json.dumps(pkg))
 
-        setup_dict, test_dict, _ = generate_setup_dict_ts(tmp_path)
-        assert test_dict["test_dir"] == "__tests__"
+        with pytest.raises(RuntimeError, match="Could not detect a test directory"):
+            generate_setup_dict_ts(tmp_path)
 
     def test_known_test_packages_filtered(self, tmp_path: Path) -> None:
         pkg = {
@@ -229,6 +245,7 @@ class TestGenerateSetupDictTsEdgeCases:
             }
         }
         (tmp_path / "package.json").write_text(json.dumps(pkg))
+        self._write_test_dir(tmp_path)
 
         setup_dict, _, _ = generate_setup_dict_ts(tmp_path)
         assert "@types/jest" in setup_dict["packages"]
@@ -314,7 +331,7 @@ class TestCreateTsStubBranchEdgeCases:
         if args[0] == "status":
             return "M src/main.ts"
         if args[0] == "diff":
-            return "+new line\n-old line\n"
+            return '+new line\n+  throw new Error("STUB");\n-old line\n'
         return ""
 
     def test_branch_delete_exception_is_ignored(self, tmp_path: Path) -> None:
@@ -340,7 +357,7 @@ class TestCreateTsStubBranchEdgeCases:
                             f"{MODULE}.subprocess.run",
                             return_value=MagicMock(returncode=0),
                         ):
-                            base, ref = create_ts_stubbed_branch(
+                            base, ref, _ = create_ts_stubbed_branch(
                                 tmp_path, "owner/repo", "src"
                             )
 
@@ -369,7 +386,7 @@ class TestCreateTsStubBranchEdgeCases:
                             f"{MODULE}.subprocess.run",
                             return_value=MagicMock(returncode=0),
                         ):
-                            base, ref = create_ts_stubbed_branch(
+                            base, ref, _ = create_ts_stubbed_branch(
                                 tmp_path, "owner/repo", "src"
                             )
 
@@ -405,28 +422,28 @@ class TestCreateTsStubBranchEdgeCases:
                             f"{MODULE}.subprocess.run",
                             return_value=MagicMock(returncode=0),
                         ):
-                            base, ref = create_ts_stubbed_branch(
+                            base, ref, _ = create_ts_stubbed_branch(
                                 tmp_path, "owner/repo", "src"
                             )
 
         assert base == "ref123"
         assert ref == "ref123"
 
-    def test_additions_zero_raises_runtime_error(self, tmp_path: Path) -> None:
+    def test_no_ts_stub_markers_raises_runtime_error(self, tmp_path: Path) -> None:
         from tools.prepare_repo_ts import create_ts_stubbed_branch
 
         self._setup_repo(tmp_path)
 
-        def git_deletions_only(repo_dir, *args, **kwargs):
+        def git_no_stub_markers(repo_dir, *args, **kwargs):
             if args[0] == "status":
                 return "M src/main.ts"
             if args[0] == "diff":
-                return "-old line\n---header\n"
+                return "+new line\n-old line\n+another line\n"
             return ""
 
         with patch(f"{MODULE}.get_default_branch", return_value="main"):
             with patch(f"{MODULE}.git") as mock_git:
-                mock_git.side_effect = git_deletions_only
+                mock_git.side_effect = git_no_stub_markers
                 with patch(f"{MODULE}.get_head_sha", return_value="ref123"):
                     with patch(
                         f"{MODULE}.run_stub_ts",
@@ -447,28 +464,21 @@ class TestCreateTsStubBranchEdgeCases:
                             ):
                                 create_ts_stubbed_branch(tmp_path, "owner/repo", "src")
 
-    def test_deletions_zero_raises_runtime_error(self, tmp_path: Path) -> None:
+    def test_zero_functions_stubbed_raises_runtime_error(self, tmp_path: Path) -> None:
         from tools.prepare_repo_ts import create_ts_stubbed_branch
 
         self._setup_repo(tmp_path)
 
-        def git_additions_only(repo_dir, *args, **kwargs):
-            if args[0] == "status":
-                return "M src/main.ts"
-            if args[0] == "diff":
-                return "+new line\n+++header\n"
-            return ""
-
         with patch(f"{MODULE}.get_default_branch", return_value="main"):
             with patch(f"{MODULE}.git") as mock_git:
-                mock_git.side_effect = git_additions_only
+                mock_git.side_effect = self._git_side_effect
                 with patch(f"{MODULE}.get_head_sha", return_value="ref123"):
                     with patch(
                         f"{MODULE}.run_stub_ts",
                         return_value={
                             "files_processed": 1,
-                            "files_modified": 1,
-                            "functions_stubbed": 1,
+                            "files_modified": 0,
+                            "functions_stubbed": 0,
                             "functions_preserved": 0,
                             "errors": [],
                         },
@@ -478,7 +488,7 @@ class TestCreateTsStubBranchEdgeCases:
                             return_value=MagicMock(returncode=0),
                         ):
                             with pytest.raises(
-                                RuntimeError, match="Stubbing verification failed"
+                                RuntimeError, match="No functions were stubbed"
                             ):
                                 create_ts_stubbed_branch(tmp_path, "owner/repo", "src")
 
@@ -539,7 +549,7 @@ class TestCreateTsStubBranchEdgeCases:
                             f"{MODULE}.subprocess.run",
                             return_value=MagicMock(returncode=0),
                         ):
-                            base, ref = create_ts_stubbed_branch(
+                            base, ref, _ = create_ts_stubbed_branch(
                                 tmp_path, "owner/repo", "src"
                             )
 
@@ -597,7 +607,7 @@ class TestPrepareTsRepoEdgeCases:
                         ):
                             with patch(
                                 f"{MODULE}.create_ts_stubbed_branch",
-                                return_value=("base", "ref"),
+                                return_value=("base", "ref", 1),
                             ):
                                 with patch(f"{MODULE}.git") as mock_git:
                                     with patch(f"{MODULE}.push_to_fork") as mock_push:
@@ -632,7 +642,7 @@ class TestPrepareTsRepoEdgeCases:
                 ):
                     with patch(
                         f"{MODULE}.create_ts_stubbed_branch",
-                        return_value=("base", "ref"),
+                        return_value=("base", "ref", 1),
                     ):
                         result = prepare_ts_repo(
                             "owner/repo",

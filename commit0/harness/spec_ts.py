@@ -69,11 +69,11 @@ class Commit0TsSpec(Spec):
         """Return npm global install commands needed for the package manager in *install_cmd*."""
         cmd_lower = install_cmd.lower()
         if "pnpm" in cmd_lower:
-            return ["npm install -g pnpm"]
+            return ["command -v pnpm >/dev/null 2>&1 || npm install -g pnpm"]
         if "yarn" in cmd_lower:
-            return ["npm install -g yarn"]
+            return ["command -v yarn >/dev/null 2>&1 || npm install -g yarn"]
         if "bun" in cmd_lower:
-            return ["npm install -g bun"]
+            return ["command -v bun >/dev/null 2>&1 || npm install -g bun"]
         return []
 
     def make_repo_script_list(self) -> list[str]:

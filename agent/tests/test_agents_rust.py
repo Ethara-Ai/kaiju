@@ -15,45 +15,107 @@ MODULE = "agent.agents"
 
 
 # ---------------------------------------------------------------------------
-# _resolve_model_id_from_static_map
+# _resolve_base_model_from_arn + env-driven profile map
 # ---------------------------------------------------------------------------
-class TestResolveModelIdFromStaticMap:
-    def test_known_profile_id(self):
-        from agent.agents import _resolve_model_id_from_static_map
+class TestResolveBaseModelFromArn:
+    """The profile-ID -> base-model map is built from BEDROCK_*_ARN env vars.
 
-        result = _resolve_model_id_from_static_map(
+    Each test monkeypatches the env, rebuilds the module-level cache, then
+    asserts the resolver returns the expected base model.
+    """
+
+    @staticmethod
+    def _rebuild_map_with(monkeypatch, env):
+        """Clear all BEDROCK_*_ARN vars, set the ones provided, rebuild cache."""
+        import agent.agents as ag
+        for key in list(os.environ):
+            if key.startswith("BEDROCK_") and key.endswith("_ARN"):
+                monkeypatch.delenv(key, raising=False)
+        for k, v in env.items():
+            monkeypatch.setenv(k, v)
+        ag._ARN_PROFILE_TO_BASE_MODEL = ag._build_arn_profile_map()
+
+    def test_known_profile_id(self, monkeypatch):
+        from agent.agents import _resolve_base_model_from_arn
+
+        self._rebuild_map_with(monkeypatch, {
+            "BEDROCK_OPUS_ARN": "arn:aws:bedrock:us-east-1:123:application-inference-profile/4w7tmk1iplxi",
+        })
+        # boto3 resolution fails silently under bearer-auth; static path wins
+        result = _resolve_base_model_from_arn(
             "arn:aws:bedrock:us-east-1:123:application-inference-profile/4w7tmk1iplxi"
         )
         assert result == "anthropic.claude-opus-4-6-v1"
 
-    def test_kimi_profile(self):
-        from agent.agents import _resolve_model_id_from_static_map
+    def test_kimi_profile(self, monkeypatch):
+        from agent.agents import _resolve_base_model_from_arn
 
-        result = _resolve_model_id_from_static_map("something-5m69567zugvx-something")
+        self._rebuild_map_with(monkeypatch, {
+            "BEDROCK_KIMI_ARN": "arn:aws:bedrock:us-east-1:123:application-inference-profile/5m69567zugvx",
+        })
+        result = _resolve_base_model_from_arn("something-5m69567zugvx-something")
         assert result == "moonshotai.kimi-k2.5"
 
-    def test_unknown_profile_returns_none(self):
-        from agent.agents import _resolve_model_id_from_static_map
+    def test_nova_lite_profile(self, monkeypatch):
+        from agent.agents import _resolve_base_model_from_arn
 
-        result = _resolve_model_id_from_static_map("completely-unknown-model")
-        assert result is None
+        self._rebuild_map_with(monkeypatch, {
+            "BEDROCK_NOVA2_LITE_ARN": "arn:aws:bedrock:us-east-1:123:application-inference-profile/lv09a6pe7jzv",
+        })
+        result = _resolve_base_model_from_arn("prefix-lv09a6pe7jzv-suffix")
+        assert result == "amazon.nova-2-lite-v1:0"
 
-    def test_nova_lite_profile(self):
-        from agent.agents import _resolve_model_id_from_static_map
+    def test_nova_premier_profile(self, monkeypatch):
+        from agent.agents import _resolve_base_model_from_arn
 
-        result = _resolve_model_id_from_static_map("prefix-lv09a6pe7jzv-suffix")
-        assert result == "amazon.nova-lite-v1:0"
-
-    def test_nova_premier_profile(self):
-        from agent.agents import _resolve_model_id_from_static_map
-
-        result = _resolve_model_id_from_static_map("prefix-td6kwwwp7q0e-suffix")
+        self._rebuild_map_with(monkeypatch, {
+            "BEDROCK_NOVA_PREMIER_ARN": "arn:aws:bedrock:us-east-1:123:application-inference-profile/td6kwwwp7q0e",
+        })
+        result = _resolve_base_model_from_arn("prefix-td6kwwwp7q0e-suffix")
         assert result == "amazon.nova-premier-v1:0"
 
-    def test_empty_string(self):
-        from agent.agents import _resolve_model_id_from_static_map
+    def test_unknown_profile_returns_none(self, monkeypatch):
+        from agent.agents import _resolve_base_model_from_arn
 
-        assert _resolve_model_id_from_static_map("") is None
+        # Empty env -> empty map, unknown ARN -> boto3 path fails -> None
+        self._rebuild_map_with(monkeypatch, {})
+        # Use an ARN that won't match any real AWS profile so boto3 returns nothing
+        result = _resolve_base_model_from_arn(
+            "arn:aws:bedrock:us-east-1:000:application-inference-profile/completely-unknown-xxxxxx"
+        )
+        assert result is None
+
+    def test_unset_alias_not_in_map(self, monkeypatch):
+        """If BEDROCK_GLM5_ARN is unset, glm-5's profile ID must not appear in the map."""
+        from agent.agents import _build_arn_profile_map
+
+        self._rebuild_map_with(monkeypatch, {
+            "BEDROCK_OPUS_ARN": "arn:aws:bedrock:us-east-1:123:application-inference-profile/opusxxxxxxxx",
+        })
+        rebuilt = _build_arn_profile_map()
+        assert "zai.glm-5" not in rebuilt.values()
+        assert "anthropic.claude-opus-4-6-v1" in rebuilt.values()
+
+
+class TestExtractProfileId:
+    def test_bare_arn(self):
+        from agent.agents import _extract_profile_id
+        assert _extract_profile_id(
+            "arn:aws:bedrock:us-east-1:123:application-inference-profile/abc123"
+        ) == "abc123"
+
+    def test_routed_arn(self):
+        from agent.agents import _extract_profile_id
+        assert _extract_profile_id(
+            "bedrock/converse/arn:aws:bedrock:us-east-1:123:application-inference-profile/xyz789"
+        ) == "xyz789"
+
+    def test_non_arn_rejected(self):
+        from agent.agents import _extract_profile_id
+        assert _extract_profile_id("/onlyslash") is None
+        assert _extract_profile_id("foo/bar") is None
+        assert _extract_profile_id("") is None
+        assert _extract_profile_id("not-an-arn") is None
 
 
 # ---------------------------------------------------------------------------
@@ -62,9 +124,22 @@ class TestResolveModelIdFromStaticMap:
 class TestRegisterBedrockArnPricing:
     """Tests for register_bedrock_arn_pricing.
 
-    Uses a mock litellm module injected via sys.modules to avoid pydantic
-    import corruption when running alongside other test files.
+    Uses a mock litellm module injected via sys.modules. After the refactor,
+    pricing lookup now reads ``litellm.model_cost[base_model_id]`` instead
+    of an in-repo pricing dict, so mocks must seed base-model entries.
     """
+
+    # Prices chosen to match real GLM-5 / Kimi so the assertions stay meaningful.
+    _KIMI_PRICE = {
+        "input_cost_per_token": 6e-07,
+        "output_cost_per_token": 3e-06,
+        "litellm_provider": "bedrock",
+    }
+    _GLM5_PRICE = {
+        "input_cost_per_token": 1e-06,
+        "output_cost_per_token": 3.2e-06,
+        "litellm_provider": "bedrock",
+    }
 
     @staticmethod
     def _make_mock_litellm(initial_cost=None):
@@ -80,6 +155,17 @@ class TestRegisterBedrockArnPricing:
             modules.update(extra_modules)
         return patch.dict('sys.modules', modules)
 
+    @staticmethod
+    def _rebuild_profile_map(monkeypatch, env):
+        """Set BEDROCK_*_ARN vars and rebuild the module-level cache."""
+        import agent.agents as ag
+        for key in list(os.environ):
+            if key.startswith("BEDROCK_") and key.endswith("_ARN"):
+                monkeypatch.delenv(key, raising=False)
+        for k, v in env.items():
+            monkeypatch.setenv(k, v)
+        ag._ARN_PROFILE_TO_BASE_MODEL = ag._build_arn_profile_map()
+
     def test_non_arn_returns_early(self):
         mock_litellm = self._make_mock_litellm()
         with self._run_with_mock_litellm(mock_litellm):
@@ -87,8 +173,11 @@ class TestRegisterBedrockArnPricing:
             register_bedrock_arn_pricing('openai/gpt-4')
         assert len(mock_litellm.model_cost) == 0
 
-    def test_boto3_resolution_success(self):
-        mock_litellm = self._make_mock_litellm()
+    def test_boto3_resolution_success(self, monkeypatch):
+        # Seed mock litellm.model_cost with kimi pricing so the lookup finds it.
+        mock_litellm = self._make_mock_litellm({
+            'moonshotai.kimi-k2.5': self._KIMI_PRICE.copy(),
+        })
         model_name = 'bedrock/converse/arn:aws:bedrock:us-east-1:123:inference-profile/test-boto3-success'
 
         mock_client = MagicMock()
@@ -105,9 +194,15 @@ class TestRegisterBedrockArnPricing:
         assert model_name in mock_litellm.model_cost
         assert mock_litellm.model_cost[model_name]['litellm_provider'] == 'bedrock'
 
-    def test_static_map_fallback(self):
-        mock_litellm = self._make_mock_litellm()
+    def test_static_map_fallback(self, monkeypatch):
+        # Seed litellm.model_cost + env so the profile-ID -> kimi map is built.
+        mock_litellm = self._make_mock_litellm({
+            'moonshotai.kimi-k2.5': self._KIMI_PRICE.copy(),
+        })
         model_name = 'bedrock/converse/arn:aws:bedrock:us-east-1:999:application-inference-profile/5m69567zugvx-staticfallback'
+        self._rebuild_profile_map(monkeypatch, {
+            'BEDROCK_KIMI_ARN': 'arn:aws:bedrock:us-east-1:999:application-inference-profile/5m69567zugvx-staticfallback',
+        })
 
         mock_boto3 = MagicMock()
         mock_boto3.client.side_effect = Exception('boto3 not configured')
@@ -120,7 +215,11 @@ class TestRegisterBedrockArnPricing:
 
     def test_already_registered_skips(self):
         model_name = 'bedrock/converse/arn:aws:bedrock:us-east-1:999:application-inference-profile/5m69567zugvx-alreadyreg'
-        sentinel = {'test_sentinel': True, 'litellm_provider': 'bedrock'}
+        sentinel = {
+            'test_sentinel': True,
+            'litellm_provider': 'bedrock',
+            'input_cost_per_token': 0.00001,
+        }
         mock_litellm = self._make_mock_litellm({model_name: sentinel.copy()})
 
         mock_boto3 = MagicMock()
@@ -131,10 +230,15 @@ class TestRegisterBedrockArnPricing:
 
         assert mock_litellm.model_cost[model_name].get('test_sentinel') is True
 
-    def test_region_extraction_from_arn(self):
+    def test_region_extraction_from_arn(self, monkeypatch):
         for region in ('us-east-1', 'eu-west-1', 'ap-south-1', 'sa-east-1'):
-            mock_litellm = self._make_mock_litellm()
+            mock_litellm = self._make_mock_litellm({
+                'moonshotai.kimi-k2.5': self._KIMI_PRICE.copy(),
+            })
             model_name = f'bedrock/converse/arn:aws:bedrock:{region}:123:application-inference-profile/5m69567zugvx-{region}'
+            self._rebuild_profile_map(monkeypatch, {
+                'BEDROCK_KIMI_ARN': f'arn:aws:bedrock:{region}:123:application-inference-profile/5m69567zugvx-{region}',
+            })
 
             mock_boto3 = MagicMock()
             mock_boto3.client.side_effect = Exception('force static fallback')
@@ -144,9 +248,11 @@ class TestRegisterBedrockArnPricing:
 
             assert model_name in mock_litellm.model_cost, f'Failed for region {region}'
 
-    def test_unresolvable_arn_logs_warning(self, caplog):
+    def test_unresolvable_arn_logs_warning(self, caplog, monkeypatch):
+        # Empty env + no boto3 -> no base model resolvable -> warning emitted.
         mock_litellm = self._make_mock_litellm()
         model_name = 'bedrock/converse/arn:aws:bedrock:us-east-1:123:application-inference-profile/zzz-totally-unknown-zzz'
+        self._rebuild_profile_map(monkeypatch, {})  # clear all BEDROCK_*_ARN
 
         mock_boto3 = MagicMock()
         mock_boto3.client.side_effect = Exception('force static fallback')
@@ -157,12 +263,21 @@ class TestRegisterBedrockArnPricing:
                 register_bedrock_arn_pricing(model_name)
 
         assert model_name not in mock_litellm.model_cost
-        assert any('Could not resolve pricing' in r.message for r in caplog.records)
+        assert any(
+            'Could not resolve base model' in r.message
+            or 'costs will report' in r.message
+            for r in caplog.records
+        )
 
-    def test_boto3_resolves_via_region_key(self):
-        region_key = 'bedrock/us-east-1/some-unknown-model-v1'
+    def test_boto3_resolves_via_substring_scan(self):
+        # After refactor, the substring scan in _litellm_pricing_for_base_model
+        # finds entries containing the base-model name anywhere in the key.
         mock_litellm = self._make_mock_litellm({
-            region_key: {'input_cost_per_token': 0.001, 'output_cost_per_token': 0.002}
+            'bedrock/us-east-1/some-unknown-model-v1': {
+                'input_cost_per_token': 0.001,
+                'output_cost_per_token': 0.002,
+                'litellm_provider': 'bedrock',
+            },
         })
         model_name = 'bedrock/converse/arn:aws:bedrock:us-east-1:123:inference-profile/regionkey-test'
 
@@ -404,31 +519,27 @@ class TestAiderAgentsInit:
 
 
 # ---------------------------------------------------------------------------
-# BEDROCK_REGION_MODEL_PRICING structure
+# _BEDROCK_ENV_TO_BASE_MODEL structure
 # ---------------------------------------------------------------------------
 class TestPricingConstants:
-    def test_all_entries_have_required_keys(self):
-        from agent.agents import BEDROCK_REGION_MODEL_PRICING
+    def test_env_map_has_all_six_aliases(self):
+        from agent.agents import _BEDROCK_ENV_TO_BASE_MODEL
 
-        required_keys = {
-            "input_cost_per_token",
-            "output_cost_per_token",
-            "max_input_tokens",
-            "max_output_tokens",
-            "max_tokens",
-            "mode",
-            "litellm_provider",
+        expected = {
+            "BEDROCK_OPUS_ARN",
+            "BEDROCK_GLM5_ARN",
+            "BEDROCK_KIMI_ARN",
+            "BEDROCK_MINIMAX_ARN",
+            "BEDROCK_NOVA2_LITE_ARN",
+            "BEDROCK_NOVA_PREMIER_ARN",
         }
-        for model_id, pricing in BEDROCK_REGION_MODEL_PRICING.items():
-            for key in required_keys:
-                assert key in pricing, f"Missing {key} in {model_id}"
+        assert set(_BEDROCK_ENV_TO_BASE_MODEL.keys()) == expected
 
-    def test_costs_are_positive(self):
-        from agent.agents import BEDROCK_REGION_MODEL_PRICING
+    def test_base_models_are_strings(self):
+        from agent.agents import _BEDROCK_ENV_TO_BASE_MODEL
 
-        for model_id, pricing in BEDROCK_REGION_MODEL_PRICING.items():
-            assert pricing["input_cost_per_token"] > 0
-            assert pricing["output_cost_per_token"] > 0
+        for env_key, base in _BEDROCK_ENV_TO_BASE_MODEL.items():
+            assert isinstance(base, str) and base, f"{env_key} has non-string base"
 
 
 # ---------------------------------------------------------------------------

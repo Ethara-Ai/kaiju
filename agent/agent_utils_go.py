@@ -7,6 +7,7 @@ and Go-specific tooling (goimports, staticcheck, go vet).
 import logging
 import os
 import re
+import bz2
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -14,7 +15,9 @@ from typing import Optional
 import git
 import yaml
 
+from agent.agent_utils import get_specification, summarize_specification
 from agent.class_types import AgentConfig
+from agent.thinking_capture import SummarizerCost
 from commit0.harness.constants_go import (
     GO_SKIP_FILENAMES,
     GO_STUB_MARKER,
@@ -234,11 +237,15 @@ def get_go_message(
     repo_path: str,
     test_files: list[str],
     commit0_config_file: str = ".commit0.go.yaml",
-) -> str:
+) -> tuple[str, list[SummarizerCost]]:
     """Build the agent message/prompt for Go repos.
 
     Includes repository info, test info, lint info, and spec info
     based on agent_config settings.
+
+    Returns a tuple of (message, spec_costs) where spec_costs is a list
+    of SummarizerCost entries produced during spec summarization (empty
+    list if no summarization occurred or use_spec_info is disabled).
     """
     parts: list[str] = []
 
@@ -315,7 +322,87 @@ def get_go_message(
             parts.append("(lint results unavailable)")
         parts.append("")
 
-    return "\n".join(parts)
+    spec_costs: list[SummarizerCost] = []
+    if agent_config.use_spec_info:
+        spec_pdf_path = Path(repo_path) / "spec.pdf"
+        spec_bz2_path = Path(repo_path) / "spec.pdf.bz2"
+        decompress_failed = False
+
+        # Streamed decompress with 100 MiB cap (matches Java pattern in run_agent_java.py)
+        if spec_bz2_path.exists() and not spec_pdf_path.exists():
+            try:
+                _MAX_SPEC_DECOMPRESSED = 100 * 1024 * 1024
+                with bz2.open(str(spec_bz2_path), "rb") as in_file:
+                    with open(str(spec_pdf_path), "wb") as out_file:
+                        _written = 0
+                        while True:
+                            _chunk = in_file.read(1 << 16)
+                            if not _chunk:
+                                break
+                            _written += len(_chunk)
+                            if _written > _MAX_SPEC_DECOMPRESSED:
+                                raise ValueError(
+                                    f"Decompressed spec exceeds "
+                                    f"{_MAX_SPEC_DECOMPRESSED // (1024 * 1024)}MB limit"
+                                )
+                            out_file.write(_chunk)
+            except Exception as e:
+                logger.warning(
+                    "Failed to decompress spec file %s: %s", spec_bz2_path, e
+                )
+                if spec_pdf_path.exists():
+                    try:
+                        spec_pdf_path.unlink()
+                    except OSError:
+                        pass
+                decompress_failed = True
+
+        if not decompress_failed and spec_pdf_path.exists():
+            try:
+                raw_spec = get_specification(specification_pdf_path=spec_pdf_path)
+            except Exception as e:
+                logger.warning("Failed to read spec PDF %s: %s", spec_pdf_path, e)
+                raw_spec = ""
+            if raw_spec:
+                if len(raw_spec) > int(agent_config.max_spec_info_length * 1.5):
+                    try:
+                        processed_spec, spec_costs = summarize_specification(
+                            spec_text=raw_spec,
+                            model=agent_config.model_name,
+                            max_tokens=agent_config.spec_summary_max_tokens,
+                            max_char_length=agent_config.max_spec_info_length,
+                            cache_path=spec_pdf_path.parent / ".spec_summary_cache.json",
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "Spec summarization failed for %s: %s", spec_pdf_path, e
+                        )
+                        processed_spec = raw_spec[: agent_config.max_spec_info_length]
+                        spec_costs = []
+                else:
+                    processed_spec = raw_spec
+                parts.append(SPEC_INFO_HEADER)
+                parts.append(processed_spec)
+                parts.append("")
+        else:
+            # README fallback (matches Python agent_utils.py:512-524)
+            for readme_name in ["README.md", "README.rst", "README.txt", "README"]:
+                readme_path = Path(repo_path) / readme_name
+                if readme_path.exists():
+                    try:
+                        readme_text = readme_path.read_text(errors="replace")
+                        readme_text = readme_text[: agent_config.max_spec_info_length]
+                        parts.append(SPEC_INFO_HEADER)
+                        parts.append(readme_text)
+                        parts.append("")
+                        logger.info(
+                            "Using %s as spec fallback for %s", readme_name, repo_path
+                        )
+                        break
+                    except Exception as e:
+                        logger.warning("Failed to read %s: %s", readme_path, e)
+
+    return "\n".join(parts), spec_costs
 
 
 def create_branch(repo: git.Repo, branch: str, override: bool = False) -> None:

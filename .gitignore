@@ -123,6 +123,7 @@ celerybeat.pid
 
 # Environments
 .env
+!.env.example
 .venv
 node_modules
 env/
@@ -201,3 +202,4 @@ scripts/
 *_dataset.json
 *_entries.json
 *.bz2
+package-lock.json

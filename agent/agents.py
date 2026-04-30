@@ -14,187 +14,193 @@ from agent.agent_utils import summarize_test_output
 
 _logger = logging.getLogger(__name__)
 
-BEDROCK_REGION_MODEL_PRICING = {
-    "moonshotai.kimi-k2.5": {
-        "input_cost_per_token": 6e-07,
-        "output_cost_per_token": 3e-06,
-        "max_input_tokens": 262144,
-        "max_output_tokens": 16384,
-        "max_tokens": 16384,
-        "mode": "chat",
-        "litellm_provider": "bedrock",
-        "supports_function_calling": True,
-        "supports_system_messages": True,
-        "supports_vision": True,
-    },
-    "zai.glm-5": {
-        "input_cost_per_token": 1e-06,
-        "output_cost_per_token": 3.2e-06,
-        "max_input_tokens": 202752,
-        "max_output_tokens": 32768,
-        "max_tokens": 32768,
-        "mode": "chat",
-        "litellm_provider": "bedrock",
-        "supports_function_calling": True,
-        "supports_system_messages": True,
-        "supports_vision": False,
-    },
-    "minimax.minimax-m2.5": {
-        "input_cost_per_token": 3e-07,
-        "output_cost_per_token": 1.2e-06,
-        "max_input_tokens": 196608,
-        "max_output_tokens": 8192,
-        "max_tokens": 8192,
-        "mode": "chat",
-        "litellm_provider": "bedrock",
-        "supports_function_calling": True,
-        "supports_system_messages": True,
-        "supports_vision": False,
-    },
-    "amazon.nova-2-lite-v1:0": {
-        "input_cost_per_token": 3e-07,
-        "output_cost_per_token": 2.5e-06,
-        "max_input_tokens": 1000000,
-        "max_output_tokens": 128000,
-        "max_tokens": 128000,
-        "mode": "chat",
-        "litellm_provider": "bedrock",
-        "supports_function_calling": True,
-        "supports_system_messages": True,
-        "supports_vision": True,
-    },
-    "amazon.nova-premier-v1:0": {
-        "input_cost_per_token": 2.5e-06,
-        "output_cost_per_token": 1e-05,
-        "max_input_tokens": 1000000,
-        "max_output_tokens": 25000,
-        "max_tokens": 25000,
-        "mode": "chat",
-        "litellm_provider": "bedrock",
-        "supports_function_calling": True,
-        "supports_system_messages": True,
-        "supports_vision": True,
-    },
-}
-
-_ARN_PROFILE_TO_MODEL: dict[str, str] = {
-    "4w7tmk1iplxi": "anthropic.claude-opus-4-6-v1",
-    "1ziwaxsu12qb": "zai.glm-5",
-    "5m69567zugvx": "moonshotai.kimi-k2.5",
-    "6oaav7wbxid4": "minimax.minimax-m2.5",
-    "lv09a6pe7jzv": "amazon.nova-2-lite-v1:0",
-    "td6kwwwp7q0e": "amazon.nova-premier-v1:0",
+# Map ``BEDROCK_<ALIAS>_ARN`` env var names to the underlying base-model ID
+# that litellm uses as a pricing key. Application inference profiles are
+# per-account AWS resources, so the profile ID portion of each ARN lives in
+# ``.env`` (see ``.env.example``). Prices themselves come from
+# ``litellm.model_cost`` at resolution time -- we never hardcode numbers here.
+#
+# To add a new Bedrock alias:
+#   1. Add ``BEDROCK_<NEW>_ARN=`` to ``.env.example``
+#   2. Add an entry below mapping the env var to its base-model ID
+#   3. Add the matching case to ``commit0/harness/resolve_model.sh``
+_BEDROCK_ENV_TO_BASE_MODEL: dict[str, str] = {
+    "BEDROCK_OPUS_ARN": "anthropic.claude-opus-4-6-v1",
+    "BEDROCK_GLM5_ARN": "zai.glm-5",
+    "BEDROCK_KIMI_ARN": "moonshotai.kimi-k2.5",
+    "BEDROCK_MINIMAX_ARN": "minimax.minimax-m2.5",
+    "BEDROCK_NOVA2_LITE_ARN": "amazon.nova-2-lite-v1:0",
+    "BEDROCK_NOVA_PREMIER_ARN": "amazon.nova-premier-v1:0",
 }
 
 
-def _resolve_model_id_from_static_map(model_name: str) -> str | None:
-    """Resolve ARN profile ID to underlying model ID using static map.
+def _extract_profile_id(arn: str) -> Optional[str]:
+    """Return the 12-char profile ID suffix of a bedrock inference-profile ARN.
 
-    Falls back to this when boto3 get_inference_profile() is unavailable
-    (e.g., bearer token auth has no IAM permissions for the API call).
+    Accepts the bare ARN (``arn:aws:bedrock:...``) or a routed form
+    (``bedrock/converse/arn:...``). Returns ``None`` unless the input is
+    shaped like an inference-profile ARN.
     """
-    for profile_id, model_id in _ARN_PROFILE_TO_MODEL.items():
-        if profile_id in model_name:
-            return model_id
-    return None
+    if not arn or "arn:aws:bedrock:" not in arn or "/" not in arn:
+        return None
+    suffix = arn.rsplit("/", 1)[-1].strip()
+    return suffix or None
 
 
-def register_bedrock_arn_pricing(model_name: str) -> None:
-    """Register pricing for Bedrock ARN-based inference profiles in litellm's cost map.
+def _build_arn_profile_map() -> dict[str, str]:
+    """Collect ``profile_id -> base_model`` from environment variables.
 
-    When using custom inference profile ARNs (e.g. bedrock/converse/arn:aws:bedrock:...),
-    litellm cannot match them to known model pricing. This resolves the ARN to the
-    underlying model ID and copies its pricing into the cost map under the full ARN key.
+    Unset / empty env vars are skipped silently so a teammate who has only
+    configured a subset of models still gets correct cost tracking for those.
     """
-    if "arn:aws:bedrock:" not in model_name:
-        return
+    out: dict[str, str] = {}
+    for env_key, base_model in _BEDROCK_ENV_TO_BASE_MODEL.items():
+        arn = os.environ.get(env_key, "").strip()
+        profile_id = _extract_profile_id(arn)
+        if profile_id:
+            out[profile_id] = base_model
+    return out
 
+
+_ARN_PROFILE_TO_BASE_MODEL: dict[str, str] = _build_arn_profile_map()
+
+
+def _resolve_base_model_from_arn(model_name: str) -> Optional[str]:
+    """Return the underlying base-model ID for a bedrock inference-profile ARN.
+
+    Tries two strategies in order:
+      1. boto3 ``get_inference_profile`` (authoritative, requires the
+         ``bedrock:GetInferenceProfile`` IAM permission).
+      2. Static suffix match against ``_ARN_PROFILE_TO_BASE_MODEL`` (works
+         under bearer-token auth that does not carry that permission).
+    """
     try:
         import boto3
 
-        region = None
+        region = "us-east-1"
         for part in model_name.split(":"):
-            if (
-                part.startswith("ap-")
-                or part.startswith("us-")
-                or part.startswith("eu-")
-                or part.startswith("sa-")
-            ):
+            if part.startswith(("ap-", "us-", "eu-", "sa-")):
                 region = part
                 break
 
-        client = boto3.client("bedrock", region_name=region or "us-east-1")
         arn = model_name.split("bedrock/")[-1]
         if arn.startswith("converse/"):
-            arn = arn[len("converse/") :]
+            arn = arn[len("converse/"):]
 
+        client = boto3.client("bedrock", region_name=region)
         resp = client.get_inference_profile(inferenceProfileIdentifier=arn)
         models = resp.get("models", [])
         if models:
-            underlying_model_id = models[0].get("modelArn", "").split("/")[-1]
-            if not underlying_model_id:
-                underlying_model_id = models[0].get("modelId", "")
-
-            if not underlying_model_id:
-                _logger.debug(
-                    "Could not resolve underlying model ID from ARN: %s", model_name
-                )
-                return
-
-            import litellm
-
-            for base_id, pricing in BEDROCK_REGION_MODEL_PRICING.items():
-                if base_id in underlying_model_id or underlying_model_id in base_id:
-                    litellm.model_cost[model_name] = pricing.copy()
-                    litellm.model_cost[model_name]["litellm_provider"] = "bedrock"
-                    _logger.debug("Matched pricing for model key: %s", base_id)
-                    return
-
-            region_key = (
-                f"bedrock/{region}/{underlying_model_id}"
-                if region
-                else f"bedrock/{underlying_model_id}"
-            )
-            if region_key in litellm.model_cost:
-                litellm.model_cost[model_name] = litellm.model_cost[region_key].copy()
-                _logger.debug("Matched pricing via region key: %s", region_key)
-                return
-
-            for key, val in litellm.model_cost.items():
-                if underlying_model_id in key and "bedrock" in key:
-                    litellm.model_cost[model_name] = val.copy()
-                    _logger.debug("Matched pricing via generic key scan: %s", key)
-                    return
-
+            base = models[0].get("modelArn", "").split("/")[-1] or models[0].get("modelId", "")
+            if base:
+                return base
     except Exception:
         _logger.debug(
-            "boto3 ARN resolution failed for %s, trying static map",
+            "boto3 inference-profile lookup failed for %s, falling back to static map",
             model_name,
             exc_info=True,
         )
 
+    # Rebuild from env on every call so late-set env vars (e.g. from a
+    # subprocess that sources .env after import time) are picked up.
+    profile_map = _ARN_PROFILE_TO_BASE_MODEL or _build_arn_profile_map()
+    for profile_id, base in profile_map.items():
+        if profile_id in model_name:
+            return base
+    return None
+
+
+def _litellm_pricing_for_base_model(base_model: str) -> Optional[dict]:
+    """Look up pricing for ``base_model`` in ``litellm.model_cost``.
+
+    Tries the exact key, common Bedrock prefixes (``bedrock/``, ``us.``,
+    ``global.``, ``bedrock/<region>/``), and a substring scan. Returns the
+    first entry whose ``input_cost_per_token`` is populated.
+    """
     import litellm
 
-    if model_name in litellm.model_cost:
+    candidates = [
+        base_model,
+        f"bedrock/{base_model}",
+        f"us.{base_model}",
+        f"global.{base_model}",
+        f"bedrock/us-east-1/{base_model}",
+    ]
+    for key in candidates:
+        entry = litellm.model_cost.get(key)
+        if entry and entry.get("input_cost_per_token"):
+            return entry
+
+    for key, entry in litellm.model_cost.items():
+        if base_model in key and entry.get("input_cost_per_token"):
+            return entry
+
+    return None
+
+
+def register_bedrock_arn_pricing(model_name: str) -> None:
+    """Register pricing for a Bedrock inference-profile ARN in ``litellm.model_cost``.
+
+    Inference-profile ARNs end in an opaque 12-character identifier that
+    litellm cannot map to a base model. This resolves the ARN to its
+    underlying base-model ID, copies the matching pricing entry from
+    ``litellm.model_cost``, and registers it under both the routed key
+    (``bedrock/converse/arn:...``) and the bare ARN so that both
+    ``litellm.cost_per_token()`` and ``response._hidden_params.response_cost``
+    (used by aider) resolve correctly.
+    """
+    if "arn:aws:bedrock:" not in model_name:
         return
 
-    static_model_id = _resolve_model_id_from_static_map(model_name)
-    if static_model_id and static_model_id in BEDROCK_REGION_MODEL_PRICING:
-        litellm.model_cost[model_name] = BEDROCK_REGION_MODEL_PRICING[
-            static_model_id
-        ].copy()
-        litellm.model_cost[model_name]["litellm_provider"] = "bedrock"
-        _logger.debug(
-            "Matched pricing via static ARN map: %s → %s",
+    import litellm
+
+    if model_name in litellm.model_cost and litellm.model_cost[model_name].get(
+        "input_cost_per_token"
+    ):
+        return
+
+    base_model = _resolve_base_model_from_arn(model_name)
+    if not base_model:
+        _logger.warning(
+            "Could not resolve base model for %s -- costs will report as $0.00",
             model_name,
-            static_model_id,
         )
         return
 
-    _logger.warning(
-        "Could not resolve pricing for model %s — costs will report as $0.00",
-        model_name,
-    )
+    pricing = _litellm_pricing_for_base_model(base_model)
+    if not pricing:
+        _logger.warning(
+            "litellm has no pricing for base model %s (from %s) -- costs will report as $0.00",
+            base_model,
+            model_name,
+        )
+        return
+
+    entry = pricing.copy()
+    entry["litellm_provider"] = "bedrock"
+
+    # Register pricing under every form aider / litellm might query:
+    #   1. the full string passed in (routed or bare),
+    #   2. the routed form (bedrock/converse/arn:...),
+    #   3. the bare ARN (arn:aws:bedrock:...).
+    # This covers both litellm.cost_per_token(model=...) and aider's
+    # response._hidden_params.response_cost path, which sees the bare form.
+    litellm.model_cost[model_name] = entry
+
+    if model_name.startswith("bedrock/converse/"):
+        bare = model_name[len("bedrock/converse/"):]
+        routed = model_name
+    elif model_name.startswith("bedrock/"):
+        bare = model_name[len("bedrock/"):]
+        routed = f"bedrock/converse/{bare}"
+    else:
+        bare = model_name
+        routed = f"bedrock/converse/{bare}"
+
+    litellm.model_cost.setdefault(bare, entry)
+    litellm.model_cost.setdefault(routed, entry)
+
+    _logger.debug("Registered bedrock pricing: %s -> %s", model_name, base_model)
 
 
 def handle_logging(logging_name: str, log_file: Path) -> None:

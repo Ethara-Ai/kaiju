@@ -199,12 +199,15 @@ def run_agent_for_repo(
                     if agent_config.use_lint_info
                     else ""
                 )
-                message = get_go_message(
+                message, spec_costs = get_go_message(
                     agent_config,
                     repo_path,
                     test_files,
                     commit0_config_file=commit0_config_file,
                 )
+                if thinking_capture is not None:
+                    for c in spec_costs:
+                        thinking_capture.summarizer_costs.add(c)
 
                 agent_return = agent.run(
                     message,
@@ -275,12 +278,15 @@ def run_agent_for_repo(
                 )
                 _mark_module_done(lint_log_dir)
         else:
-            message = get_go_message(
+            message, spec_costs = get_go_message(
                 agent_config,
                 repo_path,
                 test_files,
                 commit0_config_file=commit0_config_file,
             )
+            if thinking_capture is not None:
+                for c in spec_costs:
+                    thinking_capture.summarizer_costs.add(c)
 
             update_queue.put(("start_repo", (repo_name, len(target_edit_files_rel))))
             for f, f_rel in zip(target_edit_files, target_edit_files_rel):

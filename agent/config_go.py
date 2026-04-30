@@ -54,6 +54,9 @@ def config(
     max_unit_tests_info_length: int = typer.Option(10000, help="Max test info length"),
     use_spec_info: bool = typer.Option(False, help="Include spec information"),
     max_spec_info_length: int = typer.Option(10000, help="Max spec info length"),
+    spec_summary_max_tokens: int = typer.Option(
+        4000, help="Max tokens for spec summarization LLM call"
+    ),
     use_lint_info: bool = typer.Option(False, help="Include lint results"),
     max_lint_info_length: int = typer.Option(10000, help="Max lint info length"),
     run_entire_dir_lint: bool = typer.Option(
@@ -90,6 +93,7 @@ def config(
         "max_unit_tests_info_length": max_unit_tests_info_length,
         "use_spec_info": use_spec_info,
         "max_spec_info_length": max_spec_info_length,
+        "spec_summary_max_tokens": spec_summary_max_tokens,
         "use_lint_info": use_lint_info,
         "max_lint_info_length": max_lint_info_length,
         "run_entire_dir_lint": run_entire_dir_lint,

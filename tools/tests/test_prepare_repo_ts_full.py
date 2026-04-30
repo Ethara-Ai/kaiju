@@ -594,11 +594,17 @@ class TestExecPrefix:
 
 
 class TestGenerateSetupDictTsPkgManager:
+    def _write_test_dir(self, tmp_path: Path) -> None:
+        tests_dir = tmp_path / "__tests__"
+        tests_dir.mkdir()
+        (tests_dir / "a.test.ts").write_text("test('x', () => {});")
+
     def test_npm_uses_npx(self, tmp_path: Path) -> None:
         (tmp_path / "package.json").write_text(
             json.dumps({"devDependencies": {"jest": "*"}})
         )
         (tmp_path / "package-lock.json").write_text("")
+        self._write_test_dir(tmp_path)
 
         from tools.prepare_repo_ts import generate_setup_dict_ts
 
@@ -611,6 +617,7 @@ class TestGenerateSetupDictTsPkgManager:
             json.dumps({"devDependencies": {"jest": "*"}})
         )
         (tmp_path / "pnpm-lock.yaml").write_text("")
+        self._write_test_dir(tmp_path)
 
         from tools.prepare_repo_ts import generate_setup_dict_ts
 
@@ -623,6 +630,7 @@ class TestGenerateSetupDictTsPkgManager:
             json.dumps({"devDependencies": {"vitest": "*"}})
         )
         (tmp_path / "yarn.lock").write_text("")
+        self._write_test_dir(tmp_path)
 
         from tools.prepare_repo_ts import generate_setup_dict_ts
 
@@ -635,6 +643,7 @@ class TestGenerateSetupDictTsPkgManager:
             json.dumps({"devDependencies": {"jest": "*"}})
         )
         (tmp_path / "bun.lockb").write_bytes(b"")
+        self._write_test_dir(tmp_path)
 
         from tools.prepare_repo_ts import generate_setup_dict_ts
 
@@ -665,7 +674,7 @@ class TestCreateTsStubBranchPkgManager:
                     if args[0] == "status":
                         return "M src/main.ts"
                     if args[0] == "diff":
-                        return "+new line\n-old line\n"
+                        return '+new line\n+  throw new Error("STUB");\n-old line\n'
                     return ""
 
                 mock_git.side_effect = git_side_effect
@@ -705,7 +714,7 @@ class TestCreateTsStubBranchPkgManager:
                     if args[0] == "status":
                         return "M src/main.ts"
                     if args[0] == "diff":
-                        return "+new line\n-old line\n"
+                        return '+new line\n+  throw new Error("STUB");\n-old line\n'
                     return ""
 
                 mock_git.side_effect = git_side_effect
@@ -766,12 +775,12 @@ class TestCreateTsStubBranch:
                             if args[0] == "status":
                                 return "M src/main.ts"
                             if args[0] == "diff":
-                                return "+new line\n-old line\n"
+                                return '+new line\n+  throw new Error("STUB");\n-old line\n'
                             return ""
 
                         mock_git.side_effect = git_side_effect
 
-                        base, ref = create_ts_stubbed_branch(
+                        base, ref, _ = create_ts_stubbed_branch(
                             tmp_path, "owner/repo", "src"
                         )
 
@@ -813,7 +822,7 @@ class TestPrepareTsRepo:
                     ):
                         with patch(
                             f"{MODULE}.create_ts_stubbed_branch",
-                            return_value=("base123", "ref456"),
+                            return_value=("base123", "ref456", 5),
                         ):
                             with patch(f"{MODULE}.push_to_fork"):
                                 result = prepare_ts_repo(
@@ -864,7 +873,7 @@ class TestPrepareTsRepo:
                     ):
                         with patch(
                             f"{MODULE}.create_ts_stubbed_branch",
-                            return_value=("b", "r"),
+                            return_value=("b", "r", 1),
                         ):
                             with patch(f"{MODULE}.push_to_fork"):
                                 result = prepare_ts_repo(
@@ -908,7 +917,7 @@ class TestPrepareTsRepo:
                     ):
                         with patch(
                             f"{MODULE}.create_ts_stubbed_branch",
-                            return_value=("base_abc", "ref_def"),
+                            return_value=("base_abc", "ref_def", 7),
                         ):
                             result = prepare_ts_repo(
                                 "owner/my-lib",
@@ -928,3 +937,4 @@ class TestPrepareTsRepo:
         assert "setup" in result
         assert "test" in result
         assert result["setup"]["specification"] == "https://docs.example.com"
+        assert result["functions_stubbed"] == 7

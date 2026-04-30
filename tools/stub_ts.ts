@@ -82,6 +82,10 @@ const TEST_FILE_PATTERNS = [
   /\/test\//,
   /\/tests\//,
   /\.stories\.tsx?$/,
+  /\/__mocks__\//,
+  /\/mocks\//,
+  /\/testing\//,
+  /\/fixtures\//,
 ];
 
 const SKIP_METHODS = new Set<string>([
@@ -319,30 +323,17 @@ function collectImportTimeNames(sourceFiles: SourceFile[]): Set<string> {
         names.merge(collectCallNames(stmt));
       }
 
-      // Pattern 7: Named imports — the imported binding names
-      if (Node.isImportDeclaration(stmt)) {
-        const namedImports = stmt.getNamedImports();
-        for (const ni of namedImports) {
-          const alias = ni.getAliasNode();
-          names.add(alias ? alias.getText() : ni.getName());
-        }
-        const defaultImport = stmt.getDefaultImport();
-        if (defaultImport) {
-          names.add(defaultImport.getText());
-        }
-      }
-
-      // TS-1: Barrel re-exports: `export { X } from './mod'`
       if (Node.isExportDeclaration(stmt)) {
-        const namedExports = stmt.getNamedExports();
-        for (const ne of namedExports) {
-          names.add(ne.getName());
-          const alias = ne.getAliasNode();
-          if (alias) names.add(alias.getText());
+        if (stmt.getModuleSpecifier() === undefined) {
+          const namedExports = stmt.getNamedExports();
+          for (const ne of namedExports) {
+            names.add(ne.getName());
+            const alias = ne.getAliasNode();
+            if (alias) names.add(alias.getText());
+          }
         }
       }
 
-      // TS-5: Enum member initializers with calls
       if (Node.isEnumDeclaration(stmt)) {
         for (const member of stmt.getMembers()) {
           const init = member.getInitializer();
