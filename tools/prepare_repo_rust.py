@@ -38,7 +38,6 @@ Requires:
 from __future__ import annotations
 
 import argparse
-import bz2
 import json
 import logging
 import re
@@ -47,6 +46,9 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+from tools.generate_test_ids import save_test_ids
+from tools.generate_test_ids_rust import collect_test_ids_local
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -274,57 +276,6 @@ def scrape_spec(crate: str, repo_dir: Path) -> Path | None:
     finally:
         if tmp_specs.exists():
             shutil.rmtree(tmp_specs, ignore_errors=True)
-
-
-# ─── Test ID Collection ──────────────────────────────────────────────────────
-
-
-def collect_test_ids(repo_dir: Path, test_cmd: str) -> list[str]:
-    """Collect test IDs using cargo test --list."""
-    # Parse test_cmd to extract -p <crate> if present
-    parts = test_cmd.split()
-    cmd = ["cargo", "test"]
-
-    # Carry over -p <crate> or --package <crate>
-    i = 0
-    while i < len(parts):
-        if parts[i] in ("-p", "--package") and i + 1 < len(parts):
-            cmd.extend([parts[i], parts[i + 1]])
-            i += 2
-        else:
-            i += 1
-
-    cmd.extend(["--", "--list"])
-
-    logger.info("Collecting test IDs: %s", " ".join(cmd))
-    result = subprocess.run(
-        cmd,
-        cwd=repo_dir,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
-
-    test_ids = []
-    for line in result.stdout.splitlines():
-        line = line.strip()
-        if line.endswith(": test"):
-            test_ids.append(line.replace(": test", ""))
-        elif line.endswith(": bench"):
-            continue  # skip benchmarks
-
-    logger.info("Collected %d test IDs", len(test_ids))
-    return test_ids
-
-
-def save_test_ids(crate: str, test_ids: list[str]) -> Path:
-    """Save test IDs as bz2-compressed file."""
-    TEST_IDS_DIR.mkdir(parents=True, exist_ok=True)
-    bz2_path = TEST_IDS_DIR / f"{crate}.bz2"
-    content = "\n".join(test_ids) + "\n" if test_ids else ""
-    bz2_path.write_bytes(bz2.compress(content.encode()))
-    logger.info("Saved test IDs to %s", bz2_path)
-    return bz2_path
 
 
 # ─── Dataset Entry ───────────────────────────────────────────────────────────
@@ -563,8 +514,8 @@ def prepare_rust_repo(
     # Step 9: Collect test IDs (from reference commit, not stubbed)
     # Checkout reference to collect real test names, then switch back
     git(repo_dir, "checkout", default_branch)
-    test_ids = collect_test_ids(repo_dir, test_cmd)
-    save_test_ids(crate, test_ids)
+    test_ids = collect_test_ids_local(repo_dir, test_cmd)
+    save_test_ids(test_ids, crate, TEST_IDS_DIR)
     git(repo_dir, "checkout", "commit0_all")
 
     # Step 10: Create dataset entry
