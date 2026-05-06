@@ -427,22 +427,6 @@ def generate_for_dataset(
 
             test_ids = collect_test_ids_local(repo_dir=repo_dir)
 
-            if not test_ids:
-                docker_image = _find_docker_image(repo_name)
-                if docker_image:
-                    logger.info(
-                        "  Local collection returned 0 - retrying in Docker (%s)",
-                        docker_image,
-                    )
-                    test_ids = collect_test_ids_docker(
-                        repo_name=repo_name,
-                        build_system=entry_build_system,
-                        image_name=docker_image,
-                        reference_commit=entry.get("reference_commit"),
-                        timeout=timeout,
-                        repo_full_name=repo,
-                    )
-
         if test_ids:
             out_file = save_test_ids(test_ids, repo_name, output_dir)
             logger.info("  Saved %d test IDs to %s", len(test_ids), out_file)

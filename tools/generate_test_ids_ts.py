@@ -840,24 +840,6 @@ def generate_for_ts_dataset(
             )
             test_ids = _normalize_ts_test_ids(test_ids, test_dir)
 
-            # 6. Local-to-Docker fallback
-            if not test_ids:
-                docker_image = _find_docker_image(repo_name)
-                if docker_image:
-                    logger.info(
-                        "  Local collection returned 0 -- retrying in Docker (%s)",
-                        docker_image,
-                    )
-                    test_ids = collect_ts_test_ids_docker(
-                        repo_name=repo_name,
-                        test_dir=test_dir,
-                        framework=framework,
-                        image_name=docker_image,
-                        reference_commit=entry.get("reference_commit"),
-                        timeout=timeout,
-                    )
-                    test_ids = _normalize_ts_test_ids(test_ids, test_dir)
-
         # 7. Save results
         if test_ids:
             out_file = save_test_ids(test_ids, repo_name, output_dir)
