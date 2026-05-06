@@ -47,8 +47,6 @@ import sys
 import time
 from pathlib import Path
 
-from tools.generate_test_ids import save_test_ids
-from tools.generate_test_ids_rust import collect_test_ids_local
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -57,8 +55,6 @@ logger = logging.getLogger(__name__)
 TOOLS_DIR = Path(__file__).parent
 PROJECT_ROOT = TOOLS_DIR.parent
 RUSTSTUBBER = TOOLS_DIR / "ruststubber" / "target" / "release" / "ruststubber"
-DATA_DIR = PROJECT_ROOT / "commit0" / "data"
-TEST_IDS_DIR = DATA_DIR / "rust_test_ids"
 CONSTANTS_RUST_FILE = PROJECT_ROOT / "commit0" / "harness" / "constants_rust.py"
 SPECS_DIR = PROJECT_ROOT / "specs_rust"
 
@@ -511,12 +507,7 @@ def prepare_rust_repo(
         logger.info("Pushing commit0_all to %s...", fork_name)
         git(repo_dir, "push", "origin", "commit0_all", "--force", timeout=120)
 
-    # Step 9: Collect test IDs (from reference commit, not stubbed)
-    # Checkout reference to collect real test names, then switch back
-    git(repo_dir, "checkout", default_branch)
-    test_ids = collect_test_ids_local(repo_dir, test_cmd)
-    save_test_ids(test_ids, crate, TEST_IDS_DIR)
-    git(repo_dir, "checkout", "commit0_all")
+    # Step 9: Test ID collection removed — use tools/generate_test_ids_rust.py separately
 
     # Step 10: Create dataset entry
     entry = create_dataset_entry(
@@ -550,7 +541,6 @@ def prepare_rust_repo(
     logger.info("  fork:       %s", fork_name)
     logger.info("  reference:  %s", reference_commit[:12])
     logger.info("  base:       %s", base_commit[:12])
-    logger.info("  test IDs:   %d", len(test_ids))
     logger.info("  stubbed:    %d files", ok)
     logger.info("=" * 60)
 
