@@ -1,23 +1,14 @@
-### Updates
-#### Sep 28, 2024:
 If you want to use agent with the OpenAI o1 models, please run these installation commands to update packages ``pip install git+https://github.com/wenting-zhao/aider.git``.
 
 ---
 
-# Commit0
+# Reinforcement Learning Environment
 
-<a href="https://commit-0.github.io/">Commit0</a> is a from scratch AI coding challenge. Can you create a library from commit 0?
-
-<p align="center">
-<img src="docs/arch.png" width="500px">
-</p>
+An interactive reinforcement learning environment for AI coding agents. The challenge: rebuild core Python libraries from scratch and pass their unit tests.
 
 <p align="center">
-  <a href="https://commit-0.github.io/">
-    <img src="https://img.shields.io/badge/Read-Docs-green.svg"/>
-  </a>
+<img src="docs/arch2.png" width="500px">
 </p>
-
 
 The benchmark consists of 57 core Python libraries. The challenge is to rebuild these libraries and pass their unit tests. All libraries have:
 
@@ -25,25 +16,21 @@ The benchmark consists of 57 core Python libraries. The challenge is to rebuild 
 * Detailed specification and documentation
 * Lint and type checking
 
-Commit0 is an interactive environment that makes it easy to design and test new agents. You can:
+This is an interactive environment that makes it easy to design and test new agents. You can:
 
 * Efficiently run tests in isolated environments
 * Distribute testing and development across cloud systems
 * Track and log all changes made throughout.
 
-To install Commit0, run:
+To install, run:
 
 ```
 pip install commit0
 ```
 
-Commit0 provides several commands to facilitate the process of cloning, building, testing, and evaluating repositories. Here's an overview of the available commands:
+The CLI provides several commands to facilitate the process of cloning, building, testing, and evaluating repositories. Here's an overview of the available commands:
 
 ### Setup
-
-<p align=center>
-<img src="docs/commit0.gif" width="500px">
-</p>
 
 Use `commit0 setup [OPTIONS] REPO_SPLIT` to clone a repository split.
 Available options include:
@@ -54,22 +41,22 @@ Available options include:
 | `--dataset-name` | str | Name of the Huggingface dataset | `wentingzhao/commit0_combined` |
 | `--dataset-split` | str | Split of the Huggingface dataset | `test` |
 | `--base-dir` | str | Base directory to clone repos to | `repos/` |
-| `--commit0-config-file` | str | Storing path for stateful commit0 configs | `.commit0.yaml` |
+| `--commit0-config-file` | str | Storing path for stateful configs | `.commit0.yaml` |
 
 ### Build
 
-Use `commit0 build [OPTIONS]` to build the Commit0 split chosen in the Setup stage.
+Use `commit0 build [OPTIONS]` to build the split chosen in the Setup stage.
 Available options include:
 
 | Argument | Type | Description | Default |
 |----------|------|-------------|---------|
 | `--num-workers` | int | Number of workers | `8` |
-| `--commit0-config-file` | str | Path to the commit0 dot file | `.commit0.yaml` |
+| `--commit0-config-file` | str | Path to the config dot file | `.commit0.yaml` |
 | `--verbose` | int | Verbosity level (1 or 2) | `1` |
 
 ### Get Tests
 
-Use `commit0 get-tests REPO_NAME` to get tests for a Commit0 repository.
+Use `commit0 get-tests REPO_NAME` to get tests for a repository.
 
 | Argument | Type | Description | Default |
 |----------|------|-------------|---------|
@@ -77,7 +64,7 @@ Use `commit0 get-tests REPO_NAME` to get tests for a Commit0 repository.
 
 ### Test
 
-Use `commit0 test [OPTIONS] REPO_OR_REPO_PATH [TEST_IDS]` to run tests on a Commit0 repository.
+Use `commit0 test [OPTIONS] REPO_OR_REPO_PATH [TEST_IDS]` to run tests on a repository.
 Available options include:
 
 | Argument | Type | Description | Default |
@@ -91,13 +78,13 @@ Available options include:
 | `--reference` | bool | Test the reference commit | `False` |
 | `--coverage` | bool | Get coverage information | `False` |
 | `--rebuild` | bool | Rebuild an image | `False` |
-| `--commit0-config-file` | str | Path to the commit0 dot file | `.commit0.yaml` |
+| `--commit0-config-file` | str | Path to the config dot file | `.commit0.yaml` |
 | `--verbose` | int | Verbosity level (1 or 2) | `1` |
 | `--stdin` | bool | Read test names from stdin | `False` |
 
 ### Evaluate
 
-Use `commit0 evaluate [OPTIONS]` to evaluate the Commit0 split chosen in the Setup stage.
+Use `commit0 evaluate [OPTIONS]` to evaluate the split chosen in the Setup stage.
 Available options include:
 
 | Argument | Type | Description | Default |
@@ -109,7 +96,7 @@ Available options include:
 | `--num-workers` | int | Number of workers to use | `8` |
 | `--reference` | bool | Evaluate the reference commit | `False` |
 | `--coverage` | bool | Get coverage information | `False` |
-| `--commit0-config-file` | str | Path to the commit0 dot file | `.commit0.yaml` |
+| `--commit0-config-file` | str | Path to the config dot file | `.commit0.yaml` |
 | `--rebuild` | bool | Rebuild images | `False` |
 
 ### Lint
@@ -121,12 +108,12 @@ Available options include:
 |----------|------|-------------|---------|
 | `repo_or_repo_dir` | str | Directory of the repository to test | |
 | `--files` | List[Path] | Files to lint (optional) | |
-| `--commit0-config-file` | str | Path to the commit0 dot file | `.commit0.yaml` |
+| `--commit0-config-file` | str | Path to the config dot file | `.commit0.yaml` |
 | `--verbose` | int | Verbosity level (1 or 2) | `1` |
 
 ### Save
 
-Use `commit0 save [OPTIONS] OWNER BRANCH` to save the Commit0 split to GitHub.
+Use `commit0 save [OPTIONS] OWNER BRANCH` to save the split to GitHub.
 Available options include:
 
 | Argument | Type | Description | Default |
@@ -134,7 +121,7 @@ Available options include:
 | `owner` | str | Owner of the repository | |
 | `branch` | str | Branch to save | |
 | `--github-token` | str | GitHub token for authentication | |
-| `--commit0-config-file` | str | Path to the commit0 dot file | `.commit0.yaml` |
+| `--commit0-config-file` | str | Path to the config dot file | `.commit0.yaml` |
 
 ## Agent
 
@@ -149,7 +136,7 @@ Available options include:
 | `--model-name` | str | LLM model to use, check [here](https://aider.chat/docs/llms.html) for all supported models. | `claude-3-5-sonnet-20240620` |
 | `--use-user-prompt` | bool | Use a custom prompt instead of the default prompt. | `False` |
 | `--user-prompt` | str | The prompt sent to agent. | See code for details. |
-| `--run-tests` | bool | Run tests after code modifications for feedback. You need to set up `docker` or `modal` before running tests, refer to commit0 docs. | `False` |
+| `--run-tests` | bool | Run tests after code modifications for feedback. You need to set up `docker` or `modal` before running tests. | `False` |
 | `--max-iteration` | int | Maximum number of agent iterations. | `3` |
 | `--use-repo-info` | bool | Include the repository information. | `False` |
 | `--max-repo-info-length` | int | Maximum length of the repository information to use. | `10000` |
