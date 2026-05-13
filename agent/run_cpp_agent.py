@@ -1,0 +1,427 @@
+"""C++ agent runner \u2014 mirrors run_agent_no_rich.py for C++ repos."""
+
+import json
+import logging
+import multiprocessing
+import os
+from pathlib import Path
+
+import yaml
+from git import Repo
+from tqdm import tqdm
+
+from agent.agent_utils import create_branch, load_agent_config
+from agent.agent_utils_cpp import (
+    extract_cpp_function_stubs,
+    get_cpp_test_ids,
+    get_target_edit_files_cpp,
+)
+from agent.agents_cpp import CppAiderAgents
+from agent.class_types import AgentConfig
+from agent.run_agent import DirContext, run_eval_after_each_commit
+from agent.thinking_capture import SummarizerCost, ThinkingCapture
+from commit0.cli import read_commit0_config_file
+from commit0.harness.constants import RUN_AGENT_LOG_DIR, RepoInstance
+from commit0.harness.constants_cpp import CPP_SPLIT
+from commit0.harness.utils import load_dataset_from_config
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+_CPP_PROMPT_PATH = Path(__file__).parent / "prompts" / "cpp_system_prompt.md"
+
+
+def get_cpp_message(
+    agent_config: AgentConfig,
+    repo_path: str,
+    target_files: list[str],
+) -> tuple[str, list[SummarizerCost]]:
+    """Build the C++ system prompt from ``cpp_system_prompt.md``, filling
+    ``{repo_name}``, ``{function_list}``, and ``{file_context}`` placeholders.
+    """
+    repo_name = Path(repo_path).name
+
+    function_list_parts: list[str] = []
+    for tf in target_files:
+        full_path = Path(repo_path) / tf
+        if full_path.exists():
+            stubs = extract_cpp_function_stubs(str(full_path))
+            if stubs:
+                function_list_parts.append(f"// {tf}\n{stubs}")
+
+    function_list = "\n\n".join(function_list_parts)
+
+    file_context_parts: list[str] = []
+    for tf in target_files:
+        full_path = Path(repo_path) / tf
+        if full_path.exists():
+            content = full_path.read_text(errors="replace")
+            file_context_parts.append(f"```cpp\n// {tf}\n{content}\n```")
+
+    file_context = "\n\n".join(file_context_parts)
+
+    if _CPP_PROMPT_PATH.exists():
+        template = _CPP_PROMPT_PATH.read_text()
+    else:
+        template = (
+            "You are working on the C++ repository '{repo_name}'.\n\n"
+            "## Functions to implement\n{function_list}\n\n"
+            "## Current file contents\n{file_context}\n"
+        )
+
+    message = template.format(
+        repo_name=repo_name,
+        function_list=function_list,
+        file_context=file_context,
+    )
+
+    return message, []
+
+
+def get_cpp_lint_cmd(repo_path: str) -> str:
+    """Return a ``clang-tidy`` command when ``build/compile_commands.json``
+    exists, otherwise fall back to ``clang-format --dry-run --Werror``.
+    """
+    compile_db = Path(repo_path) / "build" / "compile_commands.json"
+    if compile_db.exists():
+        return "clang-tidy -p build"
+    return "clang-format --dry-run --Werror"
+
+
+def _is_module_done(log_dir: Path) -> bool:
+    return (log_dir / ".done").exists()
+
+
+def _mark_module_done(log_dir: Path) -> None:
+    log_dir.mkdir(parents=True, exist_ok=True)
+    (log_dir / ".done").touch()
+
+
+def _get_stable_log_dir(log_dir: str, repo_name: str, branch: str) -> Path:
+    """Return stable log dir mirroring Java's {log_dir}/{repo}/{branch}/current."""
+    safe_branch = branch.replace("/", "__")
+    stable_dir = Path(log_dir) / repo_name / safe_branch / "current"
+    stable_dir.mkdir(parents=True, exist_ok=True)
+    return stable_dir
+
+
+def _file_stem(tf: str, repo_path: str = "") -> str:
+    """Convert a file path to a log-directory stem using relative path from repo root."""
+    if repo_path:
+        try:
+            tf = os.path.relpath(tf, repo_path)
+        except ValueError:
+            pass
+    return (
+        tf.replace(".cpp", "")
+        .replace(".hpp", "")
+        .replace(".cc", "")
+        .replace(".h", "")
+        .replace("/", "__")
+        .replace("\\", "__")
+        .lstrip("_")
+    )
+
+
+def run_cpp_agent_for_repo(
+    repo_base_dir: str,
+    agent_config: AgentConfig,
+    example: RepoInstance,
+    branch: str,
+    override_previous_changes: bool = False,
+    backend: str = "modal",
+    log_dir: str = str(RUN_AGENT_LOG_DIR.resolve()),
+    commit0_config_file: str = "",
+) -> None:
+    """Run the C++ agent for a single repository, processing one file at a time."""
+    repo_name = example["repo"].split("/")[-1]
+    repo_path = os.path.join(repo_base_dir, repo_name)
+
+    stable_log_dir = _get_stable_log_dir(log_dir, repo_name, branch)
+
+    if not override_previous_changes and _is_module_done(stable_log_dir):
+        logger.info(f"Skipping {repo_name} - already completed")
+        return
+
+    target_files = get_target_edit_files_cpp(repo_path)
+
+    if not target_files:
+        logger.warning(f"No target files found for {repo_name}")
+        _mark_module_done(stable_log_dir)
+        return
+
+    _test_ids = get_cpp_test_ids(repo_path)  # noqa: F841 — kept for parity with Rust agent
+
+    try:
+        local_repo = Repo(repo_path)
+        create_branch(local_repo, branch, example.get("base_commit", ""))
+    except Exception as e:
+        logger.error(f"Failed to create branch for {repo_name}: {e}")
+        return
+
+    # Write agent config snapshot — mirrors Java's .agent.yaml
+    agent_config_log_file = stable_log_dir / ".agent.yaml"
+    try:
+        with open(agent_config_log_file, "w") as f:
+            yaml.dump(agent_config, f)
+    except Exception as e:
+        logger.warning(f"Failed to write .agent.yaml for {repo_name}: {e}")
+
+    lint_cmd = get_cpp_lint_cmd(repo_path)
+    test_cmd = "ctest --test-dir build --output-on-failure"
+
+    agent = CppAiderAgents(
+        agent_config.max_iteration,
+        agent_config.model_name,
+        agent_config.cache_prompts,
+    )
+
+    # One ThinkingCapture per repo run (covers all files in this stage)
+    thinking_capture: ThinkingCapture | None = (
+        ThinkingCapture()
+        if getattr(agent_config, "capture_thinking", False)
+        else None
+    )
+
+    eval_results: dict = {}
+
+    # Process one file at a time to avoid exceeding model context limits
+    for tf in target_files:
+        stem = _file_stem(tf, repo_path)
+        file_log_dir = stable_log_dir / stem
+        file_log_dir.mkdir(parents=True, exist_ok=True)
+
+        message, summarizer_costs = get_cpp_message(agent_config, repo_path, [tf])
+
+        if thinking_capture is not None:
+            for c in summarizer_costs:
+                thinking_capture.summarizer_costs.add(c)
+
+        if agent_config.run_tests:
+            try:
+                with DirContext(repo_path):
+                    _ = agent.run(
+                        message,
+                        test_cmd,
+                        lint_cmd,
+                        [tf],
+                        file_log_dir,
+                        test_first=True,
+                        thinking_capture=thinking_capture,
+                        current_stage="test",
+                        current_module=stem,
+                        max_test_output_length=agent_config.max_test_output_length,
+                        spec_summary_max_tokens=agent_config.spec_summary_max_tokens,
+                    )
+                if agent_config.record_test_for_each_commit and commit0_config_file:
+                    current_commit = local_repo.head.commit.hexsha
+                    eval_results[current_commit] = run_eval_after_each_commit(
+                        branch, backend, commit0_config_file
+                    )
+            except Exception as e:
+                logger.error(f"Agent failed for {repo_name}/{tf}: {e}")
+                (file_log_dir / "error.log").write_text(str(e))
+
+        elif agent_config.use_lint_info:
+            try:
+                with DirContext(repo_path):
+                    _ = agent.run(
+                        message,
+                        "",
+                        lint_cmd,
+                        [tf],
+                        file_log_dir,
+                        lint_first=True,
+                        thinking_capture=thinking_capture,
+                        current_stage="lint",
+                        current_module=stem,
+                    )
+            except Exception as e:
+                logger.error(f"Agent failed for {repo_name}/{tf} (lint mode): {e}")
+                (file_log_dir / "error.log").write_text(str(e))
+
+        else:
+            try:
+                with DirContext(repo_path):
+                    _ = agent.run(
+                        message,
+                        "",
+                        "",
+                        [tf],
+                        file_log_dir,
+                        thinking_capture=thinking_capture,
+                        current_stage="draft",
+                        current_module=stem,
+                    )
+            except Exception as e:
+                logger.error(f"Agent failed for {repo_name}/{tf} (draft mode): {e}")
+                (file_log_dir / "error.log").write_text(str(e))
+
+        # Per-module .done marker — mirrors Java structure
+        _mark_module_done(file_log_dir)
+
+    # Write eval_results.json — mirrors Java structure
+    try:
+        with open(stable_log_dir / "eval_results.json", "w") as f:
+            json.dump(eval_results, f)
+    except Exception as e:
+        logger.warning(f"Failed to write eval_results.json for {repo_name}: {e}")
+
+    # Write trajectory.md when thinking capture is enabled
+    if thinking_capture is not None:
+        try:
+            from agent.trajectory_writer import write_trajectory_md
+
+            if getattr(agent_config, "trajectory_md", True):
+                write_trajectory_md(
+                    output_path=stable_log_dir / "trajectory.md",
+                    repo_name=repo_name,
+                    turns=thinking_capture.turns,
+                )
+                logger.info(
+                    f"Wrote trajectory.md for {repo_name}: "
+                    f"{len(thinking_capture.turns)} turns"
+                )
+        except Exception as e:
+            logger.warning(f"Failed to write trajectory.md for {repo_name}: {e}")
+
+    _mark_module_done(stable_log_dir)
+    logger.info(f"Completed {repo_name}")
+
+
+def run_cpp_agent(
+    branch: str,
+    override_previous_changes: bool,
+    backend: str,
+    agent_config_file: str,
+    commit0_config_file: str,
+    log_dir: str,
+    max_parallel_repos: int,
+) -> None:
+    """Run the C++ agent across all C++ repos in the dataset."""
+    agent_config = load_agent_config(agent_config_file)
+    commit0_config = read_commit0_config_file(commit0_config_file)
+
+    dataset = load_dataset_from_config(
+        commit0_config["dataset_name"], split=commit0_config["dataset_split"]
+    )
+
+    cpp_repo_names = {r.split("/")[-1] for r in CPP_SPLIT.get("all", [])}
+
+    cpp_examples: list[RepoInstance] = []
+    for example in dataset:
+        repo_name = example["repo"].split("/")[-1]
+        if repo_name in cpp_repo_names:
+            cpp_examples.append(example)
+
+    assert len(cpp_examples) > 0, (
+        "No C++ examples available. Check that CPP_SPLIT is correctly configured "
+        "and the dataset contains C++ repositories."
+    )
+
+    logger.info(f"Found {len(cpp_examples)} C++ repositories to process")
+
+    repo_base_dir = commit0_config.get("base_dir", "repos")
+
+    if max_parallel_repos <= 1:
+        for example in tqdm(cpp_examples, desc="Running aider for C++ repos"):
+            run_cpp_agent_for_repo(
+                repo_base_dir=repo_base_dir,
+                agent_config=agent_config,
+                example=example,
+                branch=branch,
+                override_previous_changes=override_previous_changes,
+                backend=backend,
+                log_dir=log_dir,
+                commit0_config_file=commit0_config_file,
+            )
+    else:
+        args_list = [
+            (
+                repo_base_dir,
+                agent_config,
+                example,
+                branch,
+                override_previous_changes,
+                backend,
+                log_dir,
+                commit0_config_file,
+            )
+            for example in cpp_examples
+        ]
+
+        with multiprocessing.Pool(processes=max_parallel_repos) as pool:
+            list(
+                tqdm(
+                    pool.starmap(run_cpp_agent_for_repo, args_list),
+                    total=len(args_list),
+                    desc="Running aider for C++ repos",
+                )
+            )
+
+
+def main() -> None:
+    """CLI entry point for the C++ agent runner."""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Run C++ agent on commit0 repos")
+    parser.add_argument(
+        "--branch",
+        type=str,
+        default="ai-cpp-agent",
+        help="Branch name to create for agent changes",
+    )
+    parser.add_argument(
+        "--override-previous-changes",
+        action="store_true",
+        help="Override previous agent changes",
+    )
+    parser.add_argument(
+        "--backend",
+        type=str,
+        default="modal",
+        help="Backend for evaluation (modal or local)",
+    )
+    parser.add_argument(
+        "--agent-config-file",
+        type=str,
+        default="agent/config/agent_config.yaml",
+        help="Path to agent config file",
+    )
+    parser.add_argument(
+        "--commit0-config-file",
+        type=str,
+        default=".commit0.yaml",
+        help="Path to commit0 config file",
+    )
+    parser.add_argument(
+        "--log-dir",
+        type=str,
+        default=str(RUN_AGENT_LOG_DIR.resolve()),
+        help="Directory for agent logs",
+    )
+    parser.add_argument(
+        "--max-parallel-repos",
+        type=int,
+        default=1,
+        help="Maximum number of repos to process in parallel",
+    )
+
+    args = parser.parse_args()
+
+    run_cpp_agent(
+        branch=args.branch,
+        override_previous_changes=args.override_previous_changes,
+        backend=args.backend,
+        agent_config_file=args.agent_config_file,
+        commit0_config_file=args.commit0_config_file,
+        log_dir=args.log_dir,
+        max_parallel_repos=args.max_parallel_repos,
+    )
+
+
+if __name__ == "__main__":
+    main()
