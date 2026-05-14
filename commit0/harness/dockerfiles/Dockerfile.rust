@@ -1,7 +1,6 @@
-FROM ubuntu:22.04
+FROM rust:1.88-bookworm
 
 ARG TARGETARCH
-ARG RUST_VERSION=1.88.0
 ARG DEBIAN_FRONTEND=noninteractive
 ARG http_proxy=""
 ARG https_proxy=""
@@ -43,11 +42,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libclang-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install rustup and Rust toolchain
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
-    sh -s -- -y --default-toolchain ${RUST_VERSION} --profile minimal && \
-    rustup component add rustfmt clippy && \
-    rustc --version && cargo --version
+# rustup/cargo/rustc are provided by the rust:1.88-bookworm base image.
+# Add the components the harness relies on.
+RUN rustup component add rustfmt clippy && \
+    rustc --version && cargo --version && rustfmt --version && cargo clippy --version
 
 # Cross-distro SSL cert symlinks for libraries that look in RHEL/Fedora paths
 RUN mkdir -p /etc/pki/tls/certs /etc/pki/tls /etc/pki/ca-trust/extracted/pem /etc/ssl/certs && \
