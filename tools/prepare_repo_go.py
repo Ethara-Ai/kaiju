@@ -427,6 +427,104 @@ def _find_docs_url(repo_dir: Path, module_path: str) -> str:
     return ""
 
 
+
+def _generate_readme_spec_pdf(
+    repo_dir: Path,
+    specs_dir: str | Path,
+    repo_name: str,
+) -> Path | None:
+    """Generate a spec PDF from the repo README as a fallback when no docs URL is found.
+
+    Reads the full README content and all valid HTTP(S) links present in it,
+    then renders them into a bz2-compressed PDF compatible with the spec.pdf.bz2
+    format expected by the runtime agent. Returns path to the .pdf.bz2 file,
+    or None if no README exists or PyMuPDF is unavailable.
+    """
+    readme_names = ["README.md", "README.rst", "README.txt", "README", "readme.md"]
+    readme_content = ""
+    readme_name = "README"
+    for name in readme_names:
+        candidate = repo_dir / name
+        if candidate.exists():
+            readme_content = candidate.read_text(errors="replace")
+            readme_name = name
+            break
+
+    if not readme_content.strip():
+        logger.info("  No README found for %s — skipping README spec fallback", repo_name)
+        return None
+
+    # Collect all unique HTTP(S) URLs from README, order-preserved
+    all_urls = list(dict.fromkeys(re.findall(r'https?://[^\s\)>\]"\"]+', readme_content)))
+
+    # Build spec document: full README content followed by a links appendix
+    header = f"{repo_name} — Specification (generated from {readme_name})"
+    sep = "=" * len(header)
+    doc_lines: list[str] = [header, sep, "", readme_content.strip()]
+    if all_urls:
+        doc_lines += ["", sep, "Referenced Links", sep, ""]
+        doc_lines.extend(f"  {url}" for url in all_urls)
+    full_text = "\n".join(doc_lines)
+
+    try:
+        import fitz  # PyMuPDF
+    except ImportError:
+        logger.warning(
+            "  README spec fallback unavailable — install PyMuPDF: pip install PyMuPDF"
+        )
+        return None
+
+    import bz2
+
+    # Render text to a multi-page A4 PDF
+    page_w, page_h = 595, 842  # A4 in points
+    margin = 40
+    font_size = 9
+    line_h = font_size * 1.35
+    max_chars = int((page_w - 2 * margin) / (font_size * 0.52))
+
+    def _wrap(line: str) -> list[str]:
+        if len(line) <= max_chars:
+            return [line]
+        wrapped: list[str] = []
+        while len(line) > max_chars:
+            cut = line.rfind(" ", 0, max_chars)
+            if cut < max_chars // 2:
+                cut = max_chars
+            wrapped.append(line[:cut])
+            line = line[cut:].lstrip()
+        if line:
+            wrapped.append(line)
+        return wrapped
+
+    doc = fitz.open()
+
+    def _new_page():
+        p = doc.new_page(width=page_w, height=page_h)
+        return p, margin + font_size
+
+    page, y = _new_page()
+    for raw_line in full_text.split("\n"):
+        for sub in _wrap(raw_line):
+            if y + line_h > page_h - margin:
+                page, y = _new_page()
+            if sub.strip():
+                page.insert_text((margin, y), sub, fontsize=font_size, color=(0, 0, 0))
+            y += line_h
+
+    pdf_bytes = doc.tobytes()
+    doc.close()
+
+    specs_path = Path(specs_dir)
+    specs_path.mkdir(parents=True, exist_ok=True)
+    out_path = specs_path / f"{repo_name}_readme_spec.pdf.bz2"
+    with bz2.open(out_path, "wb") as fh:
+        fh.write(pdf_bytes)
+
+    logger.info("  README-based spec written: %s", out_path)
+    return out_path
+
+
 def build_test_dict(repo_dir: Path) -> dict:
     """Build the test dict for a Go repo."""
     return {
@@ -525,6 +623,34 @@ def prepare_single_repo(
                 )
             except Exception as e:
                 logger.warning("  Spec scraping failed: %s", e)
+
+        # Fallback: generate a README-based spec if URL scraping produced nothing
+        if spec_path is None:
+            _rname = full_name.split("/")[-1]
+            readme_spec_path = _generate_readme_spec_pdf(repo_dir, specs_dir, _rname)
+            if readme_spec_path:
+                try:
+                    branch_name = "commit0_all"
+                    git(repo_dir, "checkout", branch_name)
+                    dest = repo_dir / "spec.pdf.bz2"
+                    shutil.copy2(readme_spec_path, dest)
+                    git(repo_dir, "add", "spec.pdf.bz2")
+                    git(repo_dir, "commit", "-m", f"Add README-based spec for {_rname}")
+                    base_commit = get_head_sha(repo_dir)
+                    logger.info(
+                        "  Updated base_commit with README spec: %s", base_commit[:12]
+                    )
+                    if not dry_run:
+                        token = os.environ.get("GITHUB_TOKEN")
+                        try:
+                            push_to_fork(
+                                repo_dir, forked_name, branch=branch_name, token=token
+                            )
+                        except Exception as push_err:
+                            logger.warning("  README spec push failed: %s", push_err)
+                    spec_path = readme_spec_path
+                except Exception as commit_err:
+                    logger.warning("  README spec commit failed: %s", commit_err)
 
         repo_name = full_name.split("/")[-1]
         entry = {
