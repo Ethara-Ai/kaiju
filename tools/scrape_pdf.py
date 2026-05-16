@@ -404,7 +404,7 @@ def scrape_spec(
     if _MISSING_DEPS:
         raise ImportError(_MISSING_DEP_MSG)
 
-    blocked = {"github.com", "github.io", "gitlab.com", "bitbucket.org", "pypi.org"}
+    blocked = {"github.com", "github.io", "gitlab.com", "bitbucket.org", "pypi.org", "wikipedia.org"}
     domain = urlparse(base_url).netloc.lower()
     if any(domain == b or domain.endswith("." + b) for b in blocked):
         logger.warning("  Blocked domain %s — skipping spec scrape for %s", domain, name)

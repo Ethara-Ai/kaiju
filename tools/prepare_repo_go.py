@@ -409,7 +409,7 @@ def _find_docs_url(repo_dir: Path, module_path: str) -> str:
             r'https?://[^\s\)>\]"\']*docs?\.[^\s\)>\]"\']+',
             r'https?://pkg\.go\.dev/[^\s\)>\]"\']+',
             r'https?://godoc\.org/[^\s\)>\]"\']+',
-            r'https?://[^\s\)>\]"\']+/wiki[^\s\)>\]"\']*',
+            r'https?://(?:github\.com|gitlab\.com)/[^\s\)>\]"\']*/wiki[^\s\)>\]"\"]*',
         ]
         for pattern in doc_patterns:
             m = re.search(pattern, readme_content)
